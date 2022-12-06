@@ -111,9 +111,9 @@ flags.DEFINE_enum('processor_type', 'triplet_mpnn',
                    'triplet_gpgn', 'triplet_gpgn_mask', 'triplet_gmpnn'],
                   'Processor type to use as the network P.')
 
-flags.DEFINE_string('checkpoint_path', '/tmp/CLRS30',
+flags.DEFINE_string('checkpoint_path', '/tmp/CLRS30_v1.0.0',
                     'Path in which checkpoints are saved.')
-flags.DEFINE_string('dataset_path', '/tmp/CLRS30',
+flags.DEFINE_string('dataset_path', '/tmp/CLRS30_v1.0.0',
                     'Path in which dataset is stored.')
 flags.DEFINE_boolean('freeze_processor', False,
                      'Whether to freeze the processor of the model.')
@@ -149,7 +149,7 @@ def _iterate_sampler(sampler, batch_size):
 
 
 def _maybe_download_dataset(dataset_path):
-  """Download CLRS30 dataset if needed."""
+  """Download CLRS30_v1.0.0 dataset if needed."""
   dataset_folder = os.path.join(dataset_path, clrs.get_clrs_folder())
   if os.path.isdir(dataset_folder):
     logging.info('Dataset found at %s. Skipping download.', dataset_folder)
@@ -212,7 +212,7 @@ def make_sampler(length: int,
     num_samples = clrs.CLRS30[split]['num_samples'] * multiplier
     sampler, spec = clrs.build_sampler(
         algorithm,
-        seed=rng.randint(2**32),
+        seed=rng.randint(2**31),
         num_samples=num_samples,
         length=length,
         **sampler_kwargs,
@@ -259,7 +259,7 @@ def collect_and_eval(sampler, predict_fn, sample_count, rng_key, extras):
     batch_size = feedback.outputs[0].data.shape[0]
     outputs.append(feedback.outputs)
     new_rng_key, rng_key = jax.random.split(rng_key)
-    cur_preds, _ = predict_fn(new_rng_key, feedback.features)
+    cur_preds, _, trajs = predict_fn(new_rng_key, feedback.features)
     preds.append(cur_preds)
     processed_samples += batch_size
   outputs = _concat(outputs, axis=0)
@@ -269,6 +269,24 @@ def collect_and_eval(sampler, predict_fn, sample_count, rng_key, extras):
     out.update(extras)
   return {k: unpack(v) for k, v in out.items()}
 
+def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
+  """Dump trajectories of datapoints"""
+  processed_samples = 0
+  trajs = []
+  inputs = []
+  while processed_samples < sample_count:
+    feedback = next(sampler)
+    batch_size = feedback.outputs[0].data.shape[0]
+    new_rng_key, rng_key = jax.random.split(rng_key)
+    _, _, cur_trajs = predict_fn(new_rng_key, feedback.features)
+    trajs.append(cur_trajs)
+    inputs.append(feedback)
+    processed_samples += batch_size
+  trajs = _concat(trajs, axis=0)
+  inputs = _concat(inputs, axis=0)
+  graph_fts = jax.numpy.asarray([d['node'] for d in trajs])  # .transpose(1,2,0,3)
+  return inputs, graph_fts
+
 
 def create_samplers(rng, train_lengths: List[int]):
   """Create all the samplers."""
@@ -277,6 +295,8 @@ def create_samplers(rng, train_lengths: List[int]):
   val_sample_counts = []
   test_samplers = []
   test_sample_counts = []
+  specil_samplers = []
+  specil_sample_counts = []
   spec_list = []
 
   for algo_idx, algorithm in enumerate(FLAGS.algorithms):
@@ -347,16 +367,31 @@ def create_samplers(rng, train_lengths: List[int]):
                        **common_sampler_args)
       test_sampler, test_samples, spec = make_multi_sampler(**test_args)
 
+
+      specil_args = dict(sizes=[16],
+                       split='test',
+                       batch_size=32,
+                       multiplier=2 * mult,
+                       randomize_pos=False,
+                       chunked=False,
+                       sampler_kwargs=dict(specil=True),
+                       **common_sampler_args)
+      specil_sampler, specil_samples, spec = make_multi_sampler(**specil_args)
+
+
     spec_list.append(spec)
     train_samplers.append(train_sampler)
     val_samplers.append(val_sampler)
     val_sample_counts.append(val_samples)
     test_samplers.append(test_sampler)
     test_sample_counts.append(test_samples)
+    specil_samplers.append(specil_sampler)
+    specil_sample_counts.append(specil_samples)
 
   return (train_samplers,
           val_samplers, val_sample_counts,
           test_samplers, test_sample_counts,
+          specil_samplers, specil_sample_counts,
           spec_list)
 
 
@@ -376,12 +411,13 @@ def main(unused_argv):
   train_lengths = [int(x) for x in FLAGS.train_lengths]
 
   rng = np.random.RandomState(FLAGS.seed)
-  rng_key = jax.random.PRNGKey(rng.randint(2**32))
+  rng_key = jax.random.PRNGKey(rng.randint(2**31))
 
   # Create samplers
   (train_samplers,
    val_samplers, val_sample_counts,
    test_samplers, test_sample_counts,
+   special_samplers, special_sample_counts,
    spec_list) = create_samplers(rng, train_lengths)
 
   processor_factory = clrs.get_processor_factory(
@@ -529,6 +565,27 @@ def main(unused_argv):
         new_rng_key,
         extras=common_extras)
     logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], test_stats)
+
+  #  -----
+  for algo_idx in range(len(special_samplers)):
+    new_rng_key, rng_key = jax.random.split(rng_key)
+    inputs, trajs = dump_trajectories(
+        special_samplers[algo_idx],
+        functools.partial(eval_model.predict, algorithm_index=algo_idx, return_all_features=True),
+        special_sample_counts[algo_idx],
+        new_rng_key)
+
+    def save(x, name):
+      import pickle
+      import os
+      if os.path.isfile(name):
+        os.remove(name)
+      file = open(name, 'ab')
+      pickle.dump(x, file)
+      file.close()
+    save(inputs, 'inputs.pkl')
+    save(trajs, 'trajs.pkl')
+
 
   logging.info('Done!')
 

@@ -70,6 +70,7 @@ class Sampler(abc.ABC):
       algorithm: Algorithm,
       spec: specs.Spec,
       num_samples: int,
+      specil: bool,
       *args,
       seed: Optional[int] = None,
       **kwargs,
@@ -96,6 +97,9 @@ class Sampler(abc.ABC):
     self._args = args
     self._kwargs = kwargs
 
+    self._specil = specil
+
+
     if num_samples < 0:
       logging.warning('Sampling dataset on-the-fly, unlimited samples.')
       # Just get an initial estimate of max hint length
@@ -114,9 +118,43 @@ class Sampler(abc.ABC):
        self._lengths) = self._make_batch(num_samples, spec, 0, algorithm, *args,
                                          **kwargs)
 
+  def _make_batch_specil(self, num_samples: int, spec: specs.Spec, min_length: int,
+                  algorithm: Algorithm, *args, **kwargs):
+    """Generate a specil batch of data."""
+
+    #  VALID FOR BELLMAN FORD ONLY
+
+    inputs = []
+    outputs = []
+    hints = []
+
+    orig_data = self._sample_data(*args, **kwargs)
+    graph = orig_data[0]
+    source = orig_data[1]
+
+    for i in range(num_samples):
+      data = [graph * (1+i/64), source]
+      _, probes = algorithm(*data)
+      inp, outp, hint = probing.split_stages(probes, spec)
+      inputs.append(inp)
+      outputs.append(outp)
+      hints.append(hint)
+      if len(hints) % 1000 == 0:
+        logging.info('%i samples created', len(hints))
+
+    # Batch and pad trajectories to max(T).
+    inputs = _batch_io(inputs)
+    outputs = _batch_io(outputs)
+    hints, lengths = _batch_hints(hints, min_length)
+    return inputs, outputs, hints, lengths
+
   def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int,
                   algorithm: Algorithm, *args, **kwargs):
     """Generate a batch of data."""
+
+    if self._specil:
+      return self._make_batch_specil(num_samples, spec, min_length, algorithm, *args, **kwargs)
+
     inputs = []
     outputs = []
     hints = []
@@ -260,10 +298,14 @@ def build_sampler(
     name: str,
     num_samples: int,
     *args,
+    specil: bool = False,
     seed: Optional[int] = None,
     **kwargs,
 ) -> Tuple[Sampler, specs.Spec]:
   """Builds a sampler. See `Sampler` documentation."""
+
+  #  Specil guard
+  assert name == 'bellman_ford' or not specil
 
   if name not in specs.SPECS or name not in SAMPLERS:
     raise NotImplementedError(f'No implementation of algorithm {name}.')
@@ -276,7 +318,7 @@ def build_sampler(
   if set(clean_kwargs) != set(kwargs):
     logging.warning('Ignoring kwargs %s when building sampler class %s',
                     set(kwargs).difference(clean_kwargs), sampler_class)
-  sampler = sampler_class(algorithm, spec, num_samples, seed=seed,
+  sampler = sampler_class(algorithm, spec, num_samples, specil=specil, seed=seed,
                           *args, **clean_kwargs)
   return sampler, spec
 

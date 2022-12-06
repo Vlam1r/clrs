@@ -85,7 +85,7 @@ The trajectories can be used like so:
 
 ```python
 train_ds, num_samples, spec = clrs.create_dataset(
-      folder='/tmp/CLRS30', algorithm='bfs',
+      folder='/tmp/CLRS30_v1.0.0', algorithm='bfs',
       split='train', batch_size=32)
 
 for i, feedback in enumerate(train_ds.as_numpy_iterator()):

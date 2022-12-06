@@ -16,6 +16,7 @@
 """JAX implementation of CLRS basic network."""
 
 import functools
+import logging
 
 from typing import Dict, List, Optional, Tuple
 
@@ -50,6 +51,7 @@ class _MessagePassingScanState:
   output_preds: chex.Array
   hiddens: chex.Array
   lstm_state: Optional[hk.LSTMState]
+  features: Dict[str, chex.Array]
 
 
 @chex.dataclass
@@ -117,7 +119,8 @@ class Net(hk.Module):
                         encs: Dict[str, List[hk.Module]],
                         decs: Dict[str, Tuple[hk.Module]],
                         return_hints: bool,
-                        return_all_outputs: bool
+                        return_all_outputs: bool,
+                        return_all_features: bool
                         ):
     if self.decode_hints and not first_step:
       assert self._hint_repred_mode in ['soft', 'hard', 'hard_on_eval']
@@ -162,7 +165,7 @@ class Net(hk.Module):
             probing.DataPoint(
                 name=hint.name, location=loc, type_=typ, data=hint_data))
 
-    hiddens, output_preds_cand, hint_preds, lstm_state = self._one_step_pred(
+    hiddens, output_preds_cand, hint_preds, lstm_state, features = self._one_step_pred(
         inputs, cur_hint, mp_state.hiddens,
         batch_size, nb_nodes, mp_state.lstm_state,
         spec, encs, decs, repred)
@@ -181,12 +184,14 @@ class Net(hk.Module):
         hint_preds=hint_preds,
         output_preds=output_preds,
         hiddens=hiddens,
-        lstm_state=lstm_state)
+        lstm_state=lstm_state,
+        features=None)
     # Save memory by not stacking unnecessary fields
     accum_mp_state = _MessagePassingScanState(
         hint_preds=hint_preds if return_hints else None,
         output_preds=output_preds if return_all_outputs else None,
-        hiddens=None, lstm_state=None)
+        hiddens=None, lstm_state=None,
+        features=features if True else None)  #  return_all_features
 
     # Complying to jax.scan, the first returned value is the state we carry over
     # the second value is the output that will be stacked over steps.
@@ -195,7 +200,8 @@ class Net(hk.Module):
   def __call__(self, features_list: List[_Features], repred: bool,
                algorithm_index: int,
                return_hints: bool,
-               return_all_outputs: bool):
+               return_all_outputs: bool,
+               return_all_features: bool):
     """Process one batch of data.
 
     Args:
@@ -263,7 +269,7 @@ class Net(hk.Module):
 
       mp_state = _MessagePassingScanState(
           hint_preds=None, output_preds=None,
-          hiddens=hiddens, lstm_state=lstm_state)
+          hiddens=hiddens, lstm_state=lstm_state, features=None)
 
       # Do the first step outside of the scan because it has a different
       # computation graph.
@@ -279,6 +285,7 @@ class Net(hk.Module):
           decs=self.decoders[algorithm_index],
           return_hints=return_hints,
           return_all_outputs=return_all_outputs,
+          return_all_features=return_all_features
           )
       mp_state, lean_mp_state = self._msg_passing_step(
           mp_state,
@@ -318,7 +325,8 @@ class Net(hk.Module):
       output_preds = output_mp_state.output_preds
     hint_preds = invert(accum_mp_state.hint_preds)
 
-    return output_preds, hint_preds
+    features = invert(accum_mp_state.features)
+    return output_preds, hint_preds, features
 
   def _construct_encoders_decoders(self):
     """Constructs encoders and decoders, separate for each algorithm."""
@@ -396,6 +404,11 @@ class Net(hk.Module):
         except Exception as e:
           raise Exception(f'Failed to process {dp}') from e
 
+    from jax.experimental.host_callback import call
+    def is_zero(x):
+      assert not x.any()
+    call(is_zero, graph_fts)
+
     # PROCESS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     nxt_hidden = hidden
     for _ in range(self.nb_msg_passing_steps):
@@ -439,7 +452,8 @@ class Net(hk.Module):
         repred=repred,
     )
 
-    return nxt_hidden, output_preds, hint_preds, nxt_lstm_state
+    features = dict(node=node_fts, edge=edge_fts, graph=graph_fts)
+    return nxt_hidden, output_preds, hint_preds, nxt_lstm_state, features
 
 
 class NetChunked(Net):
@@ -539,7 +553,7 @@ class NetChunked(Net):
           mp_state.lstm_state)
     else:
       lstm_state = None
-    hiddens, output_preds, hint_preds, lstm_state = self._one_step_pred(
+    hiddens, output_preds, hint_preds, lstm_state, _ = self._one_step_pred(
         inputs, hints_for_pred, hiddens,
         batch_size, nb_nodes, lstm_state,
         spec, encs, decs, repred)
