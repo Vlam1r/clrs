@@ -409,7 +409,8 @@ class PGN(Processor):
 
     if self._msgs_mlp_sizes is not None:
       mlp_in = msgs if self._force_linear else jax.nn.relu(msgs)
-      msgs = hk.nets.MLP(self._msgs_mlp_sizes)(mlp_in)
+      activation = (lambda x: x) if self._force_linear else jax.nn.relu
+      msgs = hk.nets.MLP(self._msgs_mlp_sizes, activation=activation)(mlp_in)
 
     if self.mid_act is not None and not self._force_linear:
       msgs = self.mid_act(msgs)

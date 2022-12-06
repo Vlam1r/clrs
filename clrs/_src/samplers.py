@@ -133,7 +133,7 @@ class Sampler(abc.ABC):
     source = orig_data[1]
 
     for i in range(num_samples):
-      data = [graph * (1+i/64), source]
+      data = [graph * (1+i), source]
       _, probes = algorithm(*data)
       inp, outp, hint = probing.split_stages(probes, spec)
       inputs.append(inp)

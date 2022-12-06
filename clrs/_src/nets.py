@@ -404,10 +404,6 @@ class Net(hk.Module):
         except Exception as e:
           raise Exception(f'Failed to process {dp}') from e
 
-    from jax.experimental.host_callback import call
-    def is_zero(x):
-      assert not x.any()
-    call(is_zero, graph_fts)
 
     # PROCESS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     nxt_hidden = hidden
@@ -421,6 +417,19 @@ class Net(hk.Module):
           batch_size=batch_size,
           nb_nodes=nb_nodes,
       )
+
+    if True:
+      graph_fts = jnp.max(hidden, axis=-2)
+
+    # Extract data from new hiddens into graph features
+    if False:
+      hidden_to_graph = hk.Linear(self.hidden_dim)
+      graph_fts = graph_fts + hidden_to_graph(jnp.max(hidden, axis=-2))
+
+    # Add noise to new hiddens
+    if False:
+      hidden_noise = jax.random.normal(hk.next_rng_key(), hidden.shape)
+      nxt_hidden = nxt_hidden + hidden_noise
 
     if not repred:      # dropout only on training
       nxt_hidden = hk.dropout(hk.next_rng_key(), self._dropout_prob, nxt_hidden)
