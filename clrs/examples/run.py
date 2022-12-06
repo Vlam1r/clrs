@@ -104,7 +104,7 @@ flags.DEFINE_enum('encoder_init', 'default',
                   ['default', 'xavier_on_scalars'],
                   'Initialiser to use for the encoders.')
 flags.DEFINE_enum('processor_type', 'triplet_mpnn',
-                  ['deepsets', 'mpnn', 'pgn', 'pgn_mask',
+                  ['deepsets', 'mpnn', 'pgn', 'pgnlin', 'pgn_mask',
                    'triplet_mpnn', 'triplet_pgn', 'triplet_pgn_mask',
                    'gat', 'gatv2', 'gat_full', 'gatv2_full',
                    'gpgn', 'gpgn_mask', 'gmpnn',

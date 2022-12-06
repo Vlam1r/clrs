@@ -342,6 +342,7 @@ class PGN(Processor):
       use_triplets: bool = False,
       nb_triplet_fts: int = 8,
       gated: bool = False,
+      force_linear: bool = False,
       name: str = 'mpnn_aggr',
   ):
     super().__init__(name=name)
@@ -357,6 +358,7 @@ class PGN(Processor):
     self.use_ln = use_ln
     self.use_triplets = use_triplets
     self.nb_triplet_fts = nb_triplet_fts
+    self._force_linear = force_linear
     self.gated = gated
 
   def __call__(
@@ -391,7 +393,7 @@ class PGN(Processor):
 
     tri_msgs = None
 
-    if self.use_triplets:
+    if self.use_triplets and not self._force_linear:
       # Triplet messages, as done by Dudzik and Velickovic (2022)
       triplets = get_triplet_msgs(z, edge_fts, graph_fts, self.nb_triplet_fts)
 
@@ -406,9 +408,10 @@ class PGN(Processor):
         msg_e + jnp.expand_dims(msg_g, axis=(1, 2)))
 
     if self._msgs_mlp_sizes is not None:
-      msgs = hk.nets.MLP(self._msgs_mlp_sizes)(jax.nn.relu(msgs))
+      mlp_in = msgs if self._force_linear else jax.nn.relu(msgs)
+      msgs = hk.nets.MLP(self._msgs_mlp_sizes)(mlp_in)
 
-    if self.mid_act is not None:
+    if self.mid_act is not None and not self._force_linear:
       msgs = self.mid_act(msgs)
 
     if self.reduction == jnp.mean:
@@ -427,7 +430,7 @@ class PGN(Processor):
 
     ret = h_1 + h_2
 
-    if self.activation is not None:
+    if self.activation is not None and not self._force_linear:
       ret = self.activation(ret)
 
     if self.use_ln:
@@ -443,6 +446,34 @@ class PGN(Processor):
 
     return ret, tri_msgs
 
+
+class LinearPGN(PGN):
+  """PGN Network without nonlinearities"""
+
+  def __init__(
+      self,
+      out_size: int,
+      mid_size: Optional[int] = None,
+      reduction: _Fn = jnp.max,
+      msgs_mlp_sizes: Optional[List[int]] = None,
+      use_ln: bool = False,
+      use_triplets: bool = False,
+      nb_triplet_fts: int = 8,
+      gated: bool = False,
+      name: str = 'linear_pgn',
+  ):
+    super().__init__(out_size=out_size,
+                     mid_size=mid_size,
+                     mid_act=None,
+                     activation=None,
+                     reduction=reduction,
+                     msgs_mlp_sizes=msgs_mlp_sizes,
+                     use_ln=use_ln,
+                     use_triplets=use_triplets,
+                     nb_triplet_fts=nb_triplet_fts,
+                     gated=gated,
+                     force_linear=True,
+                     name=name)
 
 class DeepSets(PGN):
   """Deep Sets (Zaheer et al., NeurIPS 2017)."""
@@ -750,6 +781,14 @@ def get_processor_factory(kind: str,
           use_triplets=False,
           nb_triplet_fts=0,
       )
+    elif kind == 'pgnlin':
+      processor = LinearPGN(
+        out_size=out_size,
+        msgs_mlp_sizes=[out_size, out_size],
+        use_ln=use_ln,
+        use_triplets=False,
+        nb_triplet_fts=0,
+        )
     elif kind == 'pgn_mask':
       processor = PGNMask(
           out_size=out_size,
