@@ -370,10 +370,10 @@ def create_samplers(rng, train_lengths: List[int]):
       test_sampler, test_samples, spec = make_multi_sampler(**test_args)
 
 
-      specil_args = dict(sizes=[64],
+      specil_args = dict(sizes=[16],
                        split='test',
                        batch_size=32,
-                       multiplier=4 * mult,
+                       multiplier=512 * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=True),

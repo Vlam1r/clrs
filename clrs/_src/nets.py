@@ -293,7 +293,7 @@ class Net(hk.Module):
           first_step=True,
           **common_args)
 
-      jax.debug.print(f"{nb_mp_steps} steps")
+      # jax.debug.print(f"{nb_mp_steps} steps")
 
       # Then scan through the rest.
       scan_fn = functools.partial(
@@ -427,7 +427,7 @@ class Net(hk.Module):
     # call(is_4, self.nb_msg_passing_steps)
 
     if True:
-      graph_fts = jnp.max(hidden, axis=-2)
+      graph_fts = jnp.max(nxt_hidden, axis=-2)
 
     # Extract data from new hiddens into graph features
     if False:

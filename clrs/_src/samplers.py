@@ -118,42 +118,10 @@ class Sampler(abc.ABC):
        self._lengths) = self._make_batch(num_samples, spec, 0, algorithm, *args,
                                          **kwargs)
 
-  def _make_batch_specil(self, num_samples: int, spec: specs.Spec, min_length: int,
-                  algorithm: Algorithm, *args, **kwargs):
-    """Generate a specil batch of data."""
-
-    #  VALID FOR BELLMAN FORD ONLY
-
-    inputs = []
-    outputs = []
-    hints = []
-
-    orig_data = self._sample_data(*args, **kwargs)
-    graph = orig_data[0]
-    source = orig_data[1]
-
-    for i in jax.numpy.linspace(start=1, stop=2, num=num_samples):
-      data = [graph * i, source]
-      _, probes = algorithm(*data)
-      inp, outp, hint = probing.split_stages(probes, spec)
-      inputs.append(inp)
-      outputs.append(outp)
-      hints.append(hint)
-      if len(hints) % 500 == 0:
-        logging.info('%i samples created', len(hints))
-
-    # Batch and pad trajectories to max(T).
-    inputs = _batch_io(inputs)
-    outputs = _batch_io(outputs)
-    hints, lengths = _batch_hints(hints, min_length)
-    return inputs, outputs, hints, lengths
 
   def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int,
                   algorithm: Algorithm, *args, **kwargs):
     """Generate a batch of data."""
-
-    if self._specil:
-      return self._make_batch_specil(num_samples, spec, min_length, algorithm, *args, **kwargs)
 
     inputs = []
     outputs = []
@@ -526,6 +494,45 @@ class BellmanFordSampler(Sampler):
         high=high)
     source_node = self._rng.choice(length)
     return [graph, source_node]
+
+  def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int, algorithm: Algorithm, *args, **kwargs):
+
+    if not self._specil:
+      return super()._make_batch(num_samples, spec, min_length, algorithm, *args, **kwargs)
+
+    # Special sample generation for testing
+
+    inputs = []
+    outputs = []
+    hints = []
+
+    orig_data = self._sample_data(*args, **kwargs)
+    graph = orig_data[0]
+    source = orig_data[1]
+    n = graph.shape[0]
+
+    # for i in np.linspace(start=1, stop=2, num=num_samples):
+    for _ in range(num_samples):
+
+      johnson = np.repeat([self._random_sequence(length=n)], n, axis=0)
+      reweighted_graph = graph + johnson - np.transpose(johnson)
+      data = [reweighted_graph, source]
+
+      # data = [graph * i, source]
+
+      _, probes = algorithm(*data)
+      inp, outp, hint = probing.split_stages(probes, spec)
+      inputs.append(inp)
+      outputs.append(outp)
+      hints.append(hint)
+      if len(hints) % 500 == 0:
+        logging.info('%i samples created', len(hints))
+
+    # Batch and pad trajectories to max(T).
+    inputs = _batch_io(inputs)
+    outputs = _batch_io(outputs)
+    hints, lengths = _batch_hints(hints, min_length)
+    return inputs, outputs, hints, lengths
 
 
 class DAGPathSampler(Sampler):
