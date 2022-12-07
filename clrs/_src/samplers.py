@@ -132,14 +132,14 @@ class Sampler(abc.ABC):
     graph = orig_data[0]
     source = orig_data[1]
 
-    for i in range(num_samples):
-      data = [graph * (1+i), source]
+    for i in jax.numpy.linspace(start=1, stop=2, num=num_samples):
+      data = [graph * i, source]
       _, probes = algorithm(*data)
       inp, outp, hint = probing.split_stages(probes, spec)
       inputs.append(inp)
       outputs.append(outp)
       hints.append(hint)
-      if len(hints) % 1000 == 0:
+      if len(hints) % 500 == 0:
         logging.info('%i samples created', len(hints))
 
     # Batch and pad trajectories to max(T).

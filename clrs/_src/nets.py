@@ -293,6 +293,8 @@ class Net(hk.Module):
           first_step=True,
           **common_args)
 
+      jax.debug.print(f"{nb_mp_steps} steps")
+
       # Then scan through the rest.
       scan_fn = functools.partial(
           self._msg_passing_step,
@@ -417,6 +419,12 @@ class Net(hk.Module):
           batch_size=batch_size,
           nb_nodes=nb_nodes,
       )
+
+    from jax.experimental.host_callback import call
+    # jax.debug.print(f"{self.nb_msg_passing_steps} steps")
+    # def is_4(x):
+    #   assert x == 4
+    # call(is_4, self.nb_msg_passing_steps)
 
     if True:
       graph_fts = jnp.max(hidden, axis=-2)
