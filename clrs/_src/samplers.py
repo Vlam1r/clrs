@@ -20,7 +20,7 @@ import collections
 import inspect
 import types
 
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Generator
 from absl import logging
 
 from clrs._src import algorithms
@@ -34,6 +34,7 @@ _Array = np.ndarray
 _DataPoint = probing.DataPoint
 Trajectory = List[_DataPoint]
 Trajectories = List[Trajectory]
+DataStream = Generator[Any, None, None]
 
 
 Algorithm = Callable[..., Any]
@@ -70,7 +71,6 @@ class Sampler(abc.ABC):
       algorithm: Algorithm,
       spec: specs.Spec,
       num_samples: int,
-      specil: bool,
       *args,
       seed: Optional[int] = None,
       **kwargs,
@@ -97,15 +97,13 @@ class Sampler(abc.ABC):
     self._args = args
     self._kwargs = kwargs
 
-    self._specil = specil
-
-
     if num_samples < 0:
       logging.warning('Sampling dataset on-the-fly, unlimited samples.')
       # Just get an initial estimate of max hint length
       self.max_steps = -1
+      ds = self._data_stream(*args, **kwargs)
       for _ in range(1000):
-        data = self._sample_data(*args, **kwargs)
+        data = next(ds)
         _, probes = algorithm(*data)
         _, _, hint = probing.split_stages(probes, spec)
         for dp in hint:
@@ -119,6 +117,11 @@ class Sampler(abc.ABC):
                                          **kwargs)
 
 
+  def _data_stream(self, *args, **kwargs):
+    while True:
+      yield self._sample_data(*args, **kwargs)
+
+
   def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int,
                   algorithm: Algorithm, *args, **kwargs):
     """Generate a batch of data."""
@@ -127,8 +130,9 @@ class Sampler(abc.ABC):
     outputs = []
     hints = []
 
+    ds = self._data_stream(*args, **kwargs)
     for _ in range(num_samples):
-      data = self._sample_data(*args, **kwargs)
+      data = next(ds)
       _, probes = algorithm(*data)
       inp, outp, hint = probing.split_stages(probes, spec)
       inputs.append(inp)
@@ -266,14 +270,10 @@ def build_sampler(
     name: str,
     num_samples: int,
     *args,
-    specil: bool = False,
     seed: Optional[int] = None,
     **kwargs,
 ) -> Tuple[Sampler, specs.Spec]:
   """Builds a sampler. See `Sampler` documentation."""
-
-  #  Specil guard
-  assert name == 'bellman_ford' or not specil
 
   if name not in specs.SPECS or name not in SAMPLERS:
     raise NotImplementedError(f'No implementation of algorithm {name}.')
@@ -286,7 +286,7 @@ def build_sampler(
   if set(clean_kwargs) != set(kwargs):
     logging.warning('Ignoring kwargs %s when building sampler class %s',
                     set(kwargs).difference(clean_kwargs), sampler_class)
-  sampler = sampler_class(algorithm, spec, num_samples, specil=specil, seed=seed,
+  sampler = sampler_class(algorithm, spec, num_samples, seed=seed,
                           *args, **clean_kwargs)
   return sampler, spec
 
@@ -477,12 +477,17 @@ class MSTSampler(Sampler):
 class BellmanFordSampler(Sampler):
   """Bellman-Ford sampler."""
 
+  def __init__(self, *args, specil: Optional[bool] = False, **kwargs):
+    self._specil = specil
+    super().__init__(*args, **kwargs)
+
   def _sample_data(
       self,
       length: int,
       p: Tuple[float, ...] = (0.5,),
       low: float = 0.,
       high: float = 1.,
+      specil: bool = False,
   ):
     graph = self._random_er_graph(
         nb_nodes=length,
@@ -495,44 +500,50 @@ class BellmanFordSampler(Sampler):
     source_node = self._rng.choice(length)
     return [graph, source_node]
 
-  def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int, algorithm: Algorithm, *args, **kwargs):
+  def random_stream(self, stream: DataStream, k: int):
+    while True:
+      sample = next(stream, 'end')
+      if sample == 'end':
+        break
+      else:
+        adj, s = sample
+        n = adj.shape[0]
+        for i in range(k):
+          p = self._rng.permutation(n)
+          adj1 = adj[np.ix_(p, p)]
+          s1 = p[s]
+          yield adj1, s1
+
+  def johnson_stream(self, stream: DataStream, k: int):
+    while True:
+      sample = next(stream, 'end')
+      if sample == 'end':
+        break
+      else:
+        adj, s = sample
+        n = adj.shape[0]
+        for i in range(k):
+          johnson = np.repeat([self._random_sequence(length=n)], n, axis=0)
+          adj1 = adj + johnson - np.transpose(johnson)
+          yield adj1, s
+
+  def linspace_stream(self, stream: DataStream):
+    adj, s = next(stream)
+    for i in np.linspace(start=1, stop=2, num=self._num_samples):
+      adj1 = adj * i
+      yield adj1, s
+
+  def _data_stream(self, *args, **kwargs):
 
     if not self._specil:
-      return super()._make_batch(num_samples, spec, min_length, algorithm, *args, **kwargs)
+      yield from super()._data_stream(*args, **kwargs)
 
-    # Special sample generation for testing
+    yield from self.random_stream(super()._data_stream(*args, **kwargs), self._num_samples)
 
-    inputs = []
-    outputs = []
-    hints = []
+    # yield from self.linspace_stream(super()._data_stream(*args, **kwargs))
 
-    orig_data = self._sample_data(*args, **kwargs)
-    graph = orig_data[0]
-    source = orig_data[1]
-    n = graph.shape[0]
-
-    # for i in np.linspace(start=1, stop=2, num=num_samples):
-    for _ in range(num_samples):
-
-      johnson = np.repeat([self._random_sequence(length=n)], n, axis=0)
-      reweighted_graph = graph + johnson - np.transpose(johnson)
-      data = [reweighted_graph, source]
-
-      # data = [graph * i, source]
-
-      _, probes = algorithm(*data)
-      inp, outp, hint = probing.split_stages(probes, spec)
-      inputs.append(inp)
-      outputs.append(outp)
-      hints.append(hint)
-      if len(hints) % 500 == 0:
-        logging.info('%i samples created', len(hints))
-
-    # Batch and pad trajectories to max(T).
-    inputs = _batch_io(inputs)
-    outputs = _batch_io(outputs)
-    hints, lengths = _batch_hints(hints, min_length)
-    return inputs, outputs, hints, lengths
+    # yield from self.johnson_stream(self.random_stream(super()._data_stream(*args, **kwargs), 32),
+    #                                int(self._num_samples / 32))
 
 
 class DAGPathSampler(Sampler):

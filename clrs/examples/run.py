@@ -371,9 +371,9 @@ def create_samplers(rng, train_lengths: List[int]):
 
 
       specil_args = dict(sizes=[16],
-                       split='test',
+                       split='val',
                        batch_size=32,
-                       multiplier=512 * mult,
+                       multiplier=128 * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=True),
@@ -576,6 +576,9 @@ def main(unused_argv):
           extras=common_extras)
       logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], test_stats)
 
+
+  if not FLAGS.restore_best:
+    return
 
   for algo_idx in range(len(special_samplers)):
     new_rng_key, rng_key = jax.random.split(rng_key)
