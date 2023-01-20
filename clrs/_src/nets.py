@@ -426,11 +426,11 @@ class Net(hk.Module):
     #   assert x == 4
     # call(is_4, self.nb_msg_passing_steps)
 
-    if False:
+    if True:
       graph_fts = jnp.max(nxt_hidden, axis=-2)
 
     # Extract data from new hiddens into graph features and add noise to hiddens
-    if True:
+    if False:
       hidden_to_graph = hk.Linear(self.hidden_dim)
       graph_fts = graph_fts + hidden_to_graph(jnp.max(nxt_hidden, axis=-2))
       hidden_noise = jax.random.normal(hk.next_rng_key(), hidden.shape)
@@ -466,7 +466,7 @@ class Net(hk.Module):
         repred=repred,
     )
 
-    features = dict(node=node_fts, edge=edge_fts, graph=graph_fts)
+    features = dict(graph=graph_fts)
     return nxt_hidden, output_preds, hint_preds, nxt_lstm_state, features
 
 

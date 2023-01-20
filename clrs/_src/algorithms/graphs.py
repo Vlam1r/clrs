@@ -39,6 +39,7 @@ See "Introduction to Algorithms" 3ed (CLRS3) for more information.
 from typing import Tuple
 
 import chex
+
 from clrs._src import probing
 from clrs._src import specs
 import numpy as np
@@ -1147,6 +1148,8 @@ def mst_prim(A: _Array, s: int) -> _Out:
 def bellman_ford(A: _Array, s: int) -> _Out:
   """Bellman-Ford's single-source shortest path (Bellman, 1958)."""
 
+  DISCONNECTED = 0
+
   chex.assert_rank(A, 2)
   probes = probing.initialize(specs.SPECS['bellman_ford'])
 
@@ -1165,7 +1168,7 @@ def bellman_ford(A: _Array, s: int) -> _Out:
   d = np.zeros(A.shape[0])
   pi = np.arange(A.shape[0])
   msk = np.zeros(A.shape[0])
-  d[s] = 0
+  d[s] = DISCONNECTED
   msk[s] = 1
   while True:
     prev_d = np.copy(d)
@@ -1180,7 +1183,7 @@ def bellman_ford(A: _Array, s: int) -> _Out:
         })
     for u in range(A.shape[0]):
       for v in range(A.shape[0]):
-        if prev_msk[u] == 1 and A[u, v] != 0:
+        if prev_msk[u] == 1 and A[u, v] != DISCONNECTED:
           if msk[v] == 0 or prev_d[u] + A[u, v] < d[v]:
             d[v] = prev_d[u] + A[u, v]
             pi[v] = u

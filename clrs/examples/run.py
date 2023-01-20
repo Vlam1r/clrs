@@ -119,6 +119,8 @@ flags.DEFINE_boolean('freeze_processor', False,
                      'Whether to freeze the processor of the model.')
 flags.DEFINE_boolean('restore_best', False,
                      'Skip training and restore best model')
+flags.DEFINE_string('sample_strat', None,
+                     'Sample augmentation strategy for Bellman Ford')
 
 FLAGS = flags.FLAGS
 
@@ -276,18 +278,29 @@ def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
   processed_samples = 0
   trajs = []
   inputs = []
+  preds = []
+  outputs = []
   while processed_samples < sample_count:
     feedback = next(sampler)
     batch_size = feedback.outputs[0].data.shape[0]
+    outputs.append(feedback.outputs)
     new_rng_key, rng_key = jax.random.split(rng_key)
-    _, _, cur_trajs = predict_fn(new_rng_key, feedback.features)
+    cur_preds, _, cur_trajs = predict_fn(new_rng_key, feedback.features)
+    preds.append(cur_preds)
     trajs.append(cur_trajs)
     inputs.append(feedback)
     processed_samples += batch_size
+  preds = _concat(preds, axis=0)
+  outputs = _concat(outputs, axis=0)
   trajs = _concat(trajs, axis=0)
   inputs = _concat(inputs, axis=0)
-  graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1,0,2)
-  return inputs, graph_fts
+  out = clrs.evaluate_each(outputs, preds)
+  graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1, 0, 2)
+  if FLAGS.sample_strat == 'seq':
+    idx = np.argsort(inputs.features.inputs[2].data.max(axis=(1, 2)))
+    graph_fts = graph_fts[idx]
+    out['pi'] = out['pi'][idx]
+  return inputs, graph_fts, out
 
 
 def create_samplers(rng, train_lengths: List[int]):
@@ -370,10 +383,10 @@ def create_samplers(rng, train_lengths: List[int]):
       test_sampler, test_samples, spec = make_multi_sampler(**test_args)
 
 
-      specil_args = dict(sizes=[16],
+      specil_args = dict(sizes=[64],
                        split='val',
                        batch_size=32,
-                       multiplier=128 * mult,
+                       multiplier=64 * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=True),
@@ -580,13 +593,23 @@ def main(unused_argv):
   if not FLAGS.restore_best:
     return
 
+  specil_model = clrs.models.BaselineModel(
+      spec=spec_list,
+      dummy_trajectory=[next(t) for t in special_samplers],
+      **model_params
+  )
+
+  specil_model.params = eval_model.params
+
   for algo_idx in range(len(special_samplers)):
     new_rng_key, rng_key = jax.random.split(rng_key)
-    inputs, trajs = dump_trajectories(
+    inputs, trajs, stats = dump_trajectories(
         special_samplers[algo_idx],
-        functools.partial(eval_model.predict, algorithm_index=algo_idx, return_all_features=True),
+        functools.partial(specil_model.predict, algorithm_index=algo_idx, return_all_features=True),
         special_sample_counts[algo_idx],
         new_rng_key)
+    logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], np.mean(stats['pi']))
+    trajs_dump = {'trajs': trajs, 'score': stats}
 
     def save(x, name):
       import pickle
@@ -597,7 +620,7 @@ def main(unused_argv):
       pickle.dump(x, file)
       file.close()
     save(inputs, 'inputs.pkl')
-    save(trajs, 'trajs.pkl')
+    save(trajs_dump, 'trajs.pkl')
 
 
   logging.info('Done!')

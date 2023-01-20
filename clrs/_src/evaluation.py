@@ -122,6 +122,23 @@ def evaluate_hints(
   return evals
 
 
+def evaluate_each(
+    outputs: Tuple[probing.DataPoint, ...],
+    predictions: Result,
+) -> Dict[str, np.ndarray]:
+  """Evaluate output predictions."""
+  evals = {}
+  outputs = _reduce_permutations_tuple(outputs)
+  predictions = _reduce_permutations_dict(predictions)
+  for truth in outputs:
+    assert truth.name in predictions
+    pred = predictions[truth.name]
+    assert truth.type_ == specs.Type.POINTER
+    evals[truth.name] = np.mean((pred.data == truth.data) * 1.0, axis=-1)
+  # Return a single scalar score that is the mean of all output scores.
+  return evals
+
+
 def evaluate(
     outputs: Tuple[probing.DataPoint, ...],
     predictions: Result,
@@ -137,7 +154,6 @@ def evaluate(
   # Return a single scalar score that is the mean of all output scores.
   evals['score'] = sum([v.item() for v in evals.values()]) / len(evals)
   return evals
-
 
 def _evaluate(truth, pred, idx=None, lengths=None):
   """Evaluate single prediction of hint or output."""

@@ -203,7 +203,6 @@ class Sampler(abc.ABC):
   def _random_er_graph(self, nb_nodes, p=0.5, directed=False, acyclic=False,
                        weighted=False, low=0.0, high=1.0):
     """Random Erdos-Renyi graph."""
-
     mat = self._rng.binomial(1, p, size=(nb_nodes, nb_nodes))
     if not directed:
       mat *= np.transpose(mat)
@@ -487,12 +486,13 @@ class BellmanFordSampler(Sampler):
       p: Tuple[float, ...] = (0.5,),
       low: float = 0.,
       high: float = 1.,
+      directed: bool = True,
       specil: bool = False,
   ):
     graph = self._random_er_graph(
         nb_nodes=length,
         p=self._rng.choice(p),
-        directed=False,
+        directed=directed,
         acyclic=False,
         weighted=True,
         low=low,
@@ -500,50 +500,69 @@ class BellmanFordSampler(Sampler):
     source_node = self._rng.choice(length)
     return [graph, source_node]
 
-  def random_stream(self, stream: DataStream, k: int):
+  def shuffle_stream(self, stream: DataStream, k: int):
+    if k < 0: k = np.inf
     while True:
       sample = next(stream, 'end')
       if sample == 'end':
         break
       else:
-        adj, s = sample
+        yield sample
+        [adj, s] = sample
         n = adj.shape[0]
-        for i in range(k):
+        while k > 0:
+          k = k-1
           p = self._rng.permutation(n)
           adj1 = adj[np.ix_(p, p)]
           s1 = p[s]
-          yield adj1, s1
+          yield [adj1, s1]
 
-  def johnson_stream(self, stream: DataStream, k: int):
+
+  def johnson_stream(self, stream: DataStream, k: int, hi: float):
     while True:
       sample = next(stream, 'end')
       if sample == 'end':
         break
       else:
-        adj, s = sample
+        yield sample
+        [adj, s] = sample
         n = adj.shape[0]
-        for i in range(k):
-          johnson = np.repeat([self._random_sequence(length=n)], n, axis=0)
-          adj1 = adj + johnson - np.transpose(johnson)
-          yield adj1, s
+        for i in range(k - 1):
+          johnson = np.repeat([self._random_sequence(length=n, low=0, high=hi)], n, axis=0)
+          adj1 = adj + (johnson - np.transpose(johnson))
+          adj1[adj == 0] = 0  # Having no edge is denoted with 0, and we need to preserve that
+          yield [adj1, s]
 
-  def linspace_stream(self, stream: DataStream):
-    adj, s = next(stream)
-    for i in np.linspace(start=1, stop=2, num=self._num_samples):
-      adj1 = adj * i
-      yield adj1, s
+  def interleave_stream(self, a: DataStream, b: DataStream):
+    while True:
+      yield next(a)
+      yield next(b)
+
+  def seq_stream(self, stream: DataStream, k: int):
+    while True:
+      [adj, s] = next(stream)
+      for i in np.linspace(start=0.5, stop=1, num=k):
+        adj1 = adj * i
+        yield [adj1, s]
 
   def _data_stream(self, *args, **kwargs):
 
+    delta = 1/4
+    johnson = self.johnson_stream(super()._data_stream(*args, low=1/2-delta, high=1/2+delta, **kwargs),
+                                  self._num_samples, hi=1/2-delta)
+    random = super()._data_stream(*args, **kwargs)
+
     if not self._specil:
-      yield from super()._data_stream(*args, **kwargs)
+      yield from random
 
-    yield from self.random_stream(super()._data_stream(*args, **kwargs), self._num_samples)
+    #yield from random
+    #yield from self.shuffle_stream(super()._data_stream(*args, **kwargs), self._num_samples)
 
-    # yield from self.linspace_stream(super()._data_stream(*args, **kwargs))
+    #yield from johnson
 
-    # yield from self.johnson_stream(self.random_stream(super()._data_stream(*args, **kwargs), 32),
-    #                                int(self._num_samples / 32))
+    yield from self.seq_stream(self.shuffle_stream(random, k=int(self._num_samples / 128)), k=128)
+    #yield from self.shuffle_stream(self.seq_stream(random, 128), int(self._num_samples / 128))
+
 
 
 class DAGPathSampler(Sampler):
