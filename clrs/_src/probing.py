@@ -238,6 +238,15 @@ def graph(A: np.ndarray) -> np.ndarray:
   return probe
 
 
+def fill_in_the_gaps(A: np.ndarray) -> np.ndarray:
+  """Fills zero values with random numbers"""
+  # HACK: this should be done handled in samplers.py by separating A and Adj
+  # random_graph = np.random.uniform(size=A.shape)
+  # random_graph[A != 0] = 0
+  return A  # + random_graph
+
+
+
 def mask_one(i: int, n: int) -> np.ndarray:
   """Constructs a `mask_one` probe."""
   assert n > i

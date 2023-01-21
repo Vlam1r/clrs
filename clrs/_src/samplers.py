@@ -73,6 +73,7 @@ class Sampler(abc.ABC):
       num_samples: int,
       *args,
       seed: Optional[int] = None,
+      force_otf: Optional[bool] = False,
       **kwargs,
   ):
     """Initializes a `Sampler`.
@@ -96,11 +97,15 @@ class Sampler(abc.ABC):
     self._algorithm = algorithm
     self._args = args
     self._kwargs = kwargs
+    self._force_otf = force_otf
+    self._ds = self._data_stream(*args, **kwargs)
 
-    if num_samples < 0:
+    if num_samples < 0 or force_otf:
       logging.warning('Sampling dataset on-the-fly, unlimited samples.')
       # Just get an initial estimate of max hint length
       self.max_steps = -1
+      if force_otf:
+        return
       ds = self._data_stream(*args, **kwargs)
       for _ in range(1000):
         data = next(ds)
@@ -130,9 +135,8 @@ class Sampler(abc.ABC):
     outputs = []
     hints = []
 
-    ds = self._data_stream(*args, **kwargs)
     for _ in range(num_samples):
-      data = next(ds)
+      data = next(self._ds)
       _, probes = algorithm(*data)
       inp, outp, hint = probing.split_stages(probes, spec)
       inputs.append(inp)
@@ -157,11 +161,11 @@ class Sampler(abc.ABC):
       Subsampled trajectories.
     """
     if batch_size:
-      if self._num_samples < 0:  # generate on the fly
+      if self._num_samples < 0 or self._force_otf:  # generate on the fly
         inputs, outputs, hints, lengths = self._make_batch(
             batch_size, self._spec, self.max_steps,
             self._algorithm, *self._args, **self._kwargs)
-        if hints[0].data.shape[0] > self.max_steps:
+        if hints[0].data.shape[0] > self.max_steps and not self._force_otf:
           logging.warning('Increasing hint lengh from %i to %i',
                           self.max_steps, hints[0].data.shape[0])
           self.max_steps = hints[0].data.shape[0]
@@ -270,6 +274,7 @@ def build_sampler(
     num_samples: int,
     *args,
     seed: Optional[int] = None,
+    force_otf: Optional[bool] = False,
     **kwargs,
 ) -> Tuple[Sampler, specs.Spec]:
   """Builds a sampler. See `Sampler` documentation."""
@@ -285,7 +290,7 @@ def build_sampler(
   if set(clean_kwargs) != set(kwargs):
     logging.warning('Ignoring kwargs %s when building sampler class %s',
                     set(kwargs).difference(clean_kwargs), sampler_class)
-  sampler = sampler_class(algorithm, spec, num_samples, seed=seed,
+  sampler = sampler_class(algorithm, spec, num_samples, seed=seed, force_otf=force_otf,
                           *args, **clean_kwargs)
   return sampler, spec
 
@@ -476,7 +481,7 @@ class MSTSampler(Sampler):
 class BellmanFordSampler(Sampler):
   """Bellman-Ford sampler."""
 
-  def __init__(self, *args, specil: Optional[bool] = False, **kwargs):
+  def __init__(self, *args, specil: Optional[str] = False, **kwargs):
     self._specil = specil
     super().__init__(*args, **kwargs)
 
@@ -487,7 +492,7 @@ class BellmanFordSampler(Sampler):
       low: float = 0.,
       high: float = 1.,
       directed: bool = True,
-      specil: bool = False,
+      specil: str = None,
   ):
     graph = self._random_er_graph(
         nb_nodes=length,
@@ -501,29 +506,26 @@ class BellmanFordSampler(Sampler):
     return [graph, source_node]
 
   def shuffle_stream(self, stream: DataStream, k: int):
-    if k < 0: k = np.inf
     while True:
-      sample = next(stream, 'end')
-      if sample == 'end':
-        break
-      else:
+      try:
+        sample = next(stream)
         yield sample
         [adj, s] = sample
         n = adj.shape[0]
-        while k > 0:
-          k = k-1
+        for i in range(k - 1):
           p = self._rng.permutation(n)
           adj1 = adj[np.ix_(p, p)]
-          s1 = p[s]
+          s1 = np.where(p == s)[0][0]
           yield [adj1, s1]
+      except StopIteration:
+        return
+
 
 
   def johnson_stream(self, stream: DataStream, k: int, hi: float):
     while True:
-      sample = next(stream, 'end')
-      if sample == 'end':
-        break
-      else:
+      try:
+        sample = next(stream, 'end')
         yield sample
         [adj, s] = sample
         n = adj.shape[0]
@@ -532,6 +534,9 @@ class BellmanFordSampler(Sampler):
           adj1 = adj + (johnson - np.transpose(johnson))
           adj1[adj == 0] = 0  # Having no edge is denoted with 0, and we need to preserve that
           yield [adj1, s]
+      except StopIteration:
+        return
+
 
   def interleave_stream(self, a: DataStream, b: DataStream):
     while True:
@@ -547,22 +552,30 @@ class BellmanFordSampler(Sampler):
 
   def _data_stream(self, *args, **kwargs):
 
-    delta = 1/4
-    johnson = self.johnson_stream(super()._data_stream(*args, low=1/2-delta, high=1/2+delta, **kwargs),
-                                  self._num_samples, hi=1/2-delta)
+    if not self._specil:
+      yield from super()._data_stream(*args, **kwargs)
+      return
+
+    # kwargs['p'] = 0.1,
     random = super()._data_stream(*args, **kwargs)
 
-    if not self._specil:
+    if self._specil == 'random':
       yield from random
+    elif self._specil == 'johnson':
+      delta = 1/4
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
+                                    k=self._num_samples, hi=1 / 2 - delta)
+      yield from johnson
+    elif self._specil == 'shuffle':
+      shuffle = self.shuffle_stream(random, k=self._num_samples)
+      yield from shuffle
+    elif self._specil == 'linear':
+      linear = self.seq_stream(random, k=self._num_samples)
+      yield from linear
 
-    #yield from random
-    #yield from self.shuffle_stream(super()._data_stream(*args, **kwargs), self._num_samples)
-
-    #yield from johnson
-
-    yield from self.seq_stream(self.shuffle_stream(random, k=int(self._num_samples / 128)), k=128)
+    #yield from self.seq_stream(self.shuffle_stream(random, k=int(self._num_samples / 128)), k=128)
     #yield from self.shuffle_stream(self.seq_stream(random, 128), int(self._num_samples / 128))
-
+    return
 
 
 class DAGPathSampler(Sampler):

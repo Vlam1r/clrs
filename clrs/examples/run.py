@@ -117,7 +117,7 @@ flags.DEFINE_string('dataset_path', '/tmp/CLRS30_v1.0.0',
                     'Path in which dataset is stored.')
 flags.DEFINE_boolean('freeze_processor', False,
                      'Whether to freeze the processor of the model.')
-flags.DEFINE_boolean('restore_best', False,
+flags.DEFINE_boolean('test', False,
                      'Skip training and restore best model')
 flags.DEFINE_string('sample_strat', None,
                      'Sample augmentation strategy for Bellman Ford')
@@ -273,6 +273,9 @@ def collect_and_eval(sampler, predict_fn, sample_count, rng_key, extras):
     out.update(extras)
   return {k: unpack(v) for k, v in out.items()}
 
+def fill(trajs):
+  return trajs
+
 def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
   """Dump trajectories of datapoints"""
   processed_samples = 0
@@ -292,14 +295,10 @@ def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
     processed_samples += batch_size
   preds = _concat(preds, axis=0)
   outputs = _concat(outputs, axis=0)
-  trajs = _concat(trajs, axis=0)
+  trajs = _concat(fill(trajs), axis=0)
   inputs = _concat(inputs, axis=0)
   out = clrs.evaluate_each(outputs, preds)
   graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1, 0, 2)
-  if FLAGS.sample_strat == 'seq':
-    idx = np.argsort(inputs.features.inputs[2].data.max(axis=(1, 2)))
-    graph_fts = graph_fts[idx]
-    out['pi'] = out['pi'][idx]
   return inputs, graph_fts, out
 
 
@@ -386,10 +385,10 @@ def create_samplers(rng, train_lengths: List[int]):
       specil_args = dict(sizes=[64],
                        split='val',
                        batch_size=32,
-                       multiplier=64 * mult,
+                       multiplier=4096 * mult,
                        randomize_pos=False,
                        chunked=False,
-                       sampler_kwargs=dict(specil=True),
+                       sampler_kwargs=dict(specil=FLAGS.sample_strat, force_otf=True),
                        **common_sampler_args)
       specil_sampler, specil_samples, spec = make_multi_sampler(**specil_args)
 
@@ -473,7 +472,7 @@ def main(unused_argv):
   else:
     train_model = eval_model
 
-  if FLAGS.restore_best:
+  if FLAGS.test:
     with open("D:\\tmp\\CLRS30_v1.0.0\\best.pkl", 'rb') as file:
       import pickle
       best = pickle.load(file)
@@ -528,9 +527,10 @@ def main(unused_argv):
           examples_in_chunk = len(feedback.features.lengths)
         current_train_items[algo_idx] += examples_in_chunk
         # to compare results with the standard 32-batch_size experiments
-        logging.info('Algo %s step %i current loss %f, current_train_items %i.',
-                     FLAGS.algorithms[algo_idx], step,
-                     cur_loss, current_train_items[algo_idx])
+        if step % 10 == 0:
+          logging.info('Algo %s step %i current loss %f, current_train_items %i.',
+                       FLAGS.algorithms[algo_idx], step,
+                       cur_loss, current_train_items[algo_idx])
 
       # Periodically evaluate model
       if step >= next_eval:
@@ -590,12 +590,12 @@ def main(unused_argv):
       logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], test_stats)
 
 
-  if not FLAGS.restore_best:
+  if not FLAGS.test:
     return
 
   specil_model = clrs.models.BaselineModel(
       spec=spec_list,
-      dummy_trajectory=[next(t) for t in special_samplers],
+      dummy_trajectory=[next(t) for t in test_samplers],
       **model_params
   )
 
@@ -609,18 +609,9 @@ def main(unused_argv):
         special_sample_counts[algo_idx],
         new_rng_key)
     logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], np.mean(stats['pi']))
-    trajs_dump = {'trajs': trajs, 'score': stats}
+    trajs_dump = {'trajs': trajs, 'score': stats['pi']}
 
-    def save(x, name):
-      import pickle
-      import os
-      if os.path.isfile(name):
-        os.remove(name)
-      file = open(name, 'ab')
-      pickle.dump(x, file)
-      file.close()
-    save(inputs, 'inputs.pkl')
-    save(trajs_dump, 'trajs.pkl')
+  np.savez('trajs.npz', **trajs_dump)
 
 
   logging.info('Done!')
