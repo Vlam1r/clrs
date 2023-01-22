@@ -274,6 +274,10 @@ def collect_and_eval(sampler, predict_fn, sample_count, rng_key, extras):
   return {k: unpack(v) for k, v in out.items()}
 
 def fill(trajs):
+  n = max([len(x) for x in trajs])
+  for x in trajs:
+    while len(x) < n:
+      x.append(x[-1])  # Duplicate last trajectory to align lengths
   return trajs
 
 def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
@@ -384,8 +388,8 @@ def create_samplers(rng, train_lengths: List[int]):
 
       specil_args = dict(sizes=[64],
                        split='val',
-                       batch_size=32,
-                       multiplier=4096 * mult,
+                       batch_size=16,
+                       multiplier=2**12 * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=FLAGS.sample_strat, force_otf=True),

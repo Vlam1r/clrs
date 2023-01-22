@@ -556,15 +556,20 @@ class BellmanFordSampler(Sampler):
       yield from super()._data_stream(*args, **kwargs)
       return
 
-    # kwargs['p'] = 0.1,
     random = super()._data_stream(*args, **kwargs)
 
     if self._specil == 'random':
       yield from random
     elif self._specil == 'johnson':
+      kwargs['p'] = 0.1,
       delta = 1/4
       johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
                                     k=self._num_samples, hi=1 / 2 - delta)
+      yield from johnson
+    elif self._specil == 'flat_johnson':
+      kwargs['p'] = 0.1,
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2, high=1 / 2, **kwargs),
+                                    k=self._num_samples, hi=1 / 2)
       yield from johnson
     elif self._specil == 'shuffle':
       shuffle = self.shuffle_stream(random, k=self._num_samples)
@@ -572,9 +577,19 @@ class BellmanFordSampler(Sampler):
     elif self._specil == 'linear':
       linear = self.seq_stream(random, k=self._num_samples)
       yield from linear
+    elif self._specil == 'shuffle_linear':
+      split = 256
+      shuffle = self.shuffle_stream(random, k=self._num_samples // split)
+      linear = self.seq_stream(shuffle, k=split)
+      yield from linear
+    elif self._specil == 'interleave_random_linear':
+      interleave = self.interleave_stream(random, self.seq_stream(random, k=self._num_samples // 2))
+      yield from interleave
+    elif self._specil == 'random_linear':
+      split = 256
+      linear = self.seq_stream(random, k=split)
+      yield from linear
 
-    #yield from self.seq_stream(self.shuffle_stream(random, k=int(self._num_samples / 128)), k=128)
-    #yield from self.shuffle_stream(self.seq_stream(random, 128), int(self._num_samples / 128))
     return
 
 
