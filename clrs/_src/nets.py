@@ -33,6 +33,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
+from Workspace.noise_injection import inject_noise, load_noise_vectors, NoiseInjectionStrategy
 
 _Array = chex.Array
 _DataPoint = probing.DataPoint
@@ -87,6 +88,7 @@ class Net(hk.Module):
       hint_repred_mode='soft',
       nb_dims=None,
       nb_msg_passing_steps=1,
+      noise_mode: str = 'Noisefree',
       name: str = 'net',
   ):
     """Constructs a `Net`."""
@@ -104,6 +106,8 @@ class Net(hk.Module):
     self.use_lstm = use_lstm
     self.encoder_init = encoder_init
     self.nb_msg_passing_steps = nb_msg_passing_steps
+    self.noise_mode = NoiseInjectionStrategy[noise_mode]
+    self.noise_vectors = load_noise_vectors(self.noise_mode)
 
   def _msg_passing_step(self,
                         mp_state: _MessagePassingScanState,
@@ -168,7 +172,7 @@ class Net(hk.Module):
     hiddens, output_preds_cand, hint_preds, lstm_state, features = self._one_step_pred(
         inputs, cur_hint, mp_state.hiddens,
         batch_size, nb_nodes, mp_state.lstm_state,
-        spec, encs, decs, repred)
+        spec, encs, decs, repred, i)
 
     if first_step:
       output_preds = output_preds_cand
@@ -377,6 +381,7 @@ class Net(hk.Module):
       encs: Dict[str, List[hk.Module]],
       decs: Dict[str, Tuple[hk.Module]],
       repred: bool,
+      i: int,
   ):
     """Generates one-step predictions."""
 
@@ -419,22 +424,16 @@ class Net(hk.Module):
           batch_size=batch_size,
           nb_nodes=nb_nodes,
       )
-
-    from jax.experimental.host_callback import call
-    # jax.debug.print(f"{self.nb_msg_passing_steps} steps")
-    # def is_4(x):
-    #   assert x == 4
-    # call(is_4, self.nb_msg_passing_steps)
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     if True:
       graph_fts = jnp.max(nxt_hidden, axis=-2)
 
     # Extract data from new hiddens into graph features and add noise to hiddens
-    if False:
-      hidden_to_graph = hk.Linear(self.hidden_dim)
-      graph_fts = graph_fts + hidden_to_graph(jnp.max(nxt_hidden, axis=-2))
-      hidden_noise = jax.random.normal(hk.next_rng_key(), hidden.shape)
-      nxt_hidden = nxt_hidden + hidden_noise
+    # hidden_to_graph = hk.Linear(self.hidden_dim)
+    # graph_fts = graph_fts + hidden_to_graph(jnp.max(nxt_hidden, axis=-2))
+
+    nxt_hidden = inject_noise(nxt_hidden, self.noise_vectors, self.noise_mode, hk.next_rng_key(), i)
 
     if not repred:      # dropout only on training
       nxt_hidden = hk.dropout(hk.next_rng_key(), self._dropout_prob, nxt_hidden)

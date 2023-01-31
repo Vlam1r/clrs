@@ -154,6 +154,7 @@ class BaselineModel(model.Model):
       hint_repred_mode: str = 'soft',
       name: str = 'base_model',
       nb_msg_passing_steps: int = 1,
+      noise_mode: str = 'Noisefree',
   ):
     """Constructor for BaselineModel.
 
@@ -243,6 +244,7 @@ class BaselineModel(model.Model):
     self._device_params = None
     self._device_opt_state = None
     self.opt_state_skeleton = None
+    self.noise_mode = noise_mode
 
   def _create_net_fns(self, hidden_dim, encode_hints, processor_factory,
                       use_lstm, encoder_init, dropout_prob,
@@ -252,7 +254,7 @@ class BaselineModel(model.Model):
                       processor_factory, use_lstm, encoder_init,
                       dropout_prob, hint_teacher_forcing,
                       hint_repred_mode,
-                      self.nb_dims, self.nb_msg_passing_steps)(*args, **kwargs)
+                      self.nb_dims, self.nb_msg_passing_steps, self.noise_mode)(*args, **kwargs)
 
     self.net_fn = hk.transform(_use_net)
     pmap_args = dict(axis_name='batch', devices=jax.local_devices())
@@ -517,7 +519,7 @@ class BaselineModelChunked(BaselineModel):
           self._spec, hidden_dim, encode_hints, self.decode_hints,
           processor_factory, use_lstm, encoder_init, dropout_prob,
           hint_teacher_forcing, hint_repred_mode,
-          self.nb_dims, self.nb_msg_passing_steps)(*args, **kwargs)
+          self.nb_dims, self.nb_msg_passing_steps, self.noise_mode)(*args, **kwargs)
 
     self.net_fn = hk.transform(_use_net)
     pmap_args = dict(axis_name='batch', devices=jax.local_devices())

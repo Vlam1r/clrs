@@ -507,36 +507,27 @@ class BellmanFordSampler(Sampler):
 
   def shuffle_stream(self, stream: DataStream, k: int):
     while True:
-      try:
-        sample = next(stream)
-        yield sample
-        [adj, s] = sample
-        n = adj.shape[0]
-        for i in range(k - 1):
-          p = self._rng.permutation(n)
-          adj1 = adj[np.ix_(p, p)]
-          s1 = np.where(p == s)[0][0]
-          yield [adj1, s1]
-      except StopIteration:
-        return
-
-
+      sample = next(stream)
+      yield sample
+      [adj, s] = sample
+      n = adj.shape[0]
+      for i in range(k - 1):
+        p = self._rng.permutation(n)
+        adj1 = adj[np.ix_(p, p)]
+        s1 = np.where(p == s)[0][0]
+        yield [adj1, s1]
 
   def johnson_stream(self, stream: DataStream, k: int, hi: float):
     while True:
-      try:
-        sample = next(stream, 'end')
-        yield sample
-        [adj, s] = sample
-        n = adj.shape[0]
-        for i in range(k - 1):
-          johnson = np.repeat([self._random_sequence(length=n, low=0, high=hi)], n, axis=0)
-          adj1 = adj + (johnson - np.transpose(johnson))
-          adj1[adj == 0] = 0  # Having no edge is denoted with 0, and we need to preserve that
-          yield [adj1, s]
-      except StopIteration:
-        return
-
+      sample = next(stream, 'end')
+      yield sample
+      [adj, s] = sample
+      n = adj.shape[0]
+      for i in range(k - 1):
+        johnson = np.repeat([self._random_sequence(length=n, low=0, high=hi)], n, axis=0)
+        adj1 = adj + (johnson - np.transpose(johnson))
+        adj1[adj == 0] = 0  # Having no edge is denoted with 0, and we need to preserve that
+        yield [adj1, s]
 
   def interleave_stream(self, a: DataStream, b: DataStream):
     while True:
@@ -586,10 +577,23 @@ class BellmanFordSampler(Sampler):
       interleave = self.interleave_stream(random, self.seq_stream(random, k=self._num_samples // 2))
       yield from interleave
     elif self._specil == 'random_linear':
-      split = 256
+      split = 64
       linear = self.seq_stream(random, k=split)
       yield from linear
-
+    elif self._specil == 'random_johnson':
+      kwargs['p'] = 0.1,
+      delta = 1/4
+      split = self._num_samples // 16
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
+                                    k=split, hi=1 / 2 - delta)
+      yield from johnson
+    elif self._specil =='r_all':
+      kwargs['p'] = 0.1,
+      delta = 1/4
+      random = super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs)
+      johnson = self.johnson_stream(random, k=64, hi=1 / 2 - delta)
+      shuffle = self.shuffle_stream(johnson, k=64)
+      yield from shuffle
     return
 
 

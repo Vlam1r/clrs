@@ -121,6 +121,9 @@ flags.DEFINE_boolean('test', False,
                      'Skip training and restore best model')
 flags.DEFINE_string('sample_strat', None,
                      'Sample augmentation strategy for Bellman Ford')
+flags.DEFINE_enum('noise_injection_strategy', 'Noisefree',
+                  ['Noisefree', 'Uniform', 'Directional', 'Project', 'Discard'],
+                  'Type of destructive noise to apply during message passing.')
 
 FLAGS = flags.FLAGS
 
@@ -387,9 +390,9 @@ def create_samplers(rng, train_lengths: List[int]):
 
 
       specil_args = dict(sizes=[64],
-                       split='val',
-                       batch_size=16,
-                       multiplier=2**12 * mult,
+                       split='test',
+                       batch_size=32,
+                       multiplier=2**8 * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=FLAGS.sample_strat, force_otf=True),
@@ -460,6 +463,7 @@ def main(unused_argv):
       hint_teacher_forcing=FLAGS.hint_teacher_forcing,
       hint_repred_mode=FLAGS.hint_repred_mode,
       nb_msg_passing_steps=FLAGS.nb_msg_passing_steps,
+      noise_mode=FLAGS.noise_injection_strategy,
       )
 
   eval_model = clrs.models.BaselineModel(
@@ -612,7 +616,8 @@ def main(unused_argv):
         functools.partial(specil_model.predict, algorithm_index=algo_idx, return_all_features=True),
         special_sample_counts[algo_idx],
         new_rng_key)
-    logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], np.mean(stats['pi']))
+    logging.info(f'(test) algo {FLAGS.algorithms[algo_idx]} : {100*np.mean(stats["pi"]):.2f} +/- '
+                 f'{100*np.std(stats["pi"]):.2f}%')
     trajs_dump = {'trajs': trajs, 'score': stats['pi']}
 
   np.savez('trajs.npz', **trajs_dump)

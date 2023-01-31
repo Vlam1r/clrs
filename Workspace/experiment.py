@@ -1,72 +1,63 @@
-import subprocess
-
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import numpy as np
+from typing import List
 
 
-def run_experiment(name: str, path: str, global_paths_drawn=64, traj_drawn=64):
+PIXEL_S = (72. / 300) ** 2
+common_scatter_args = lambda s: dict(marker='o', s=s, edgecolor='none')
+common_plot_args = dict(color='maroon', alpha=0.6, lw=0.1)
 
-  data_dump = np.load(path + '.npz')
-  data = data_dump['trajs']
-  score = data_dump['score']
 
+def get_pca_evr(pca, d):
+  return 100 * pca.explained_variance_ratio_[:d].sum()
+
+
+def plot_heatmap_trajwise_old(data, name):
+  samples, mp_steps, dim = data.shape
+
+  trajwise_pca = PCA(n_components=10)
+  trajwise = trajwise_pca.fit_transform(data.reshape((samples, mp_steps * dim)))
+  assert trajwise.shape == (samples, 10)
+
+  fig = plt.figure(figsize=(8, 6))
+  ax = fig.add_subplot(111)
+
+  THRESHOLD = np.mean(np.max(np.abs(trajwise_pca.components_), axis=0))  # 0.05
+  relevant_components = trajwise_pca.components_[:, np.max(np.abs(trajwise_pca.components_), axis=0) > THRESHOLD]
+  ax.imshow(np.abs(relevant_components), cmap='inferno')
+
+  fig.suptitle(f"Trajectory-wise PCA components heatmap")
+  fig.tight_layout()
+  fig.savefig(f"plots/{name}_heatmap.png", dpi=300)
+
+
+def plot_heatmap_trajwise(data, name):
+  samples, mp_steps, dim = data.shape
+
+  trajwise_pca = PCA()
+  trajwise_pca.fit(data.reshape((samples, mp_steps * dim)))
+
+  fig = plt.figure(figsize=(12, 6))
+  ax = fig.add_subplot(111)
+
+  contributed_variance = trajwise_pca.explained_variance_[...,np.newaxis] * np.abs(trajwise_pca.components_)
+  contributed_variance = np.sum(contributed_variance, axis=0)
+  contributed_variance = np.reshape(contributed_variance, (mp_steps, dim))
+  contributed_variance = np.sum(contributed_variance, axis=0)
+  contributed_variance = contributed_variance / np.max(contributed_variance)
+  ax.bar(np.arange(dim), contributed_variance)
+
+  fig.suptitle(f"Trajectory-wise PCA components heatmap")
+  fig.tight_layout()
+  fig.savefig(f"plots/{name}_heatmap.png", dpi=300)
+
+def plot_trajwise(data, score, name):
   samples, mp_steps, dim = data.shape
 
   trajwise_pca = PCA()
   trajwise = trajwise_pca.fit_transform(data.reshape((samples, mp_steps * dim)))
   assert trajwise.shape == (samples, min(samples, mp_steps * dim))
-
-  # Reorder data according to trajwise pca x coordinate
-  # Needed for sampling lines and maybe sequential experiments
-  order = np.argsort(trajwise[:, 0])
-  data = data[order, :, :]
-  trajwise = trajwise[order, :]
-
-  stepwise_global_pca = PCA()
-  stepwise_global = stepwise_global_pca.fit_transform(data.reshape((samples * mp_steps, dim)))
-  assert stepwise_global.shape == (samples * mp_steps, min(samples * mp_steps, dim))
-
-  stepwise_local = np.array([PCA(n_components=3).fit_transform(data[:, i, :]) for i in range
-  (mp_steps)])
-  assert stepwise_local.shape == (mp_steps, samples, 3)
-
-  def get_pca_evr(pca, d):
-    return 100 * pca.explained_variance_ratio_[:d].sum()
-
-  PIXEL_S = (72. / 300) ** 2
-  common_scatter_args = lambda s: dict(marker='o', s=s, edgecolor='none')
-  common_plot_args = dict(color='maroon', alpha=0.6, lw=0.1)
-
-  # Plot all hidden dims as independent datapoints
-  fig = plt.figure(figsize=(12, 6))
-  ax = [fig.add_subplot(121), fig.add_subplot(122, projection='3d')]
-
-  for i in range(mp_steps):
-    ax[0].scatter(stepwise_global[i::mp_steps, 0],
-                  stepwise_global[i::mp_steps, 1],
-                  label=f'mp step {i + 1}', **common_scatter_args(PIXEL_S))
-    ax[1].scatter3D(stepwise_global[i::mp_steps, 0],
-                    stepwise_global[i::mp_steps, 1],
-                    stepwise_global[i::mp_steps, 2],
-                    label=f'mp step {i + 1}', **common_scatter_args(PIXEL_S))
-
-  if global_paths_drawn > 0:
-    for i in np.arange(0, samples, step=int(samples / global_paths_drawn)):
-      assert stepwise_global[i * mp_steps:(i + 1) * mp_steps, :].shape == (mp_steps, dim)
-      ax[0].plot(stepwise_global[i * mp_steps:(i + 1) * mp_steps, 0],
-                 stepwise_global[i * mp_steps:(i + 1) * mp_steps, 1],
-                 **common_plot_args)
-      ax[1].plot3D(stepwise_global[i * mp_steps:(i + 1) * mp_steps, 0],
-                   stepwise_global[i * mp_steps:(i + 1) * mp_steps, 1],
-                   stepwise_global[i * mp_steps:(i + 1) * mp_steps, 2],
-                   **common_plot_args)
-
-  fig.suptitle(f"Pointwise PCA (shape = samples*mp_steps, dim)\n "
-               f"{get_pca_evr(stepwise_global_pca, 3):.2f}% explained")
-
-  fig.tight_layout()
-  fig.savefig(f"plots/{name}_stepwise_global.png", dpi=300)
 
   # Plot trajectories
   fig = plt.figure(figsize=(12, 6))
@@ -82,6 +73,67 @@ def run_experiment(name: str, path: str, global_paths_drawn=64, traj_drawn=64):
   fig.tight_layout()
   fig.savefig(f"plots/{name}_trajwise.png", dpi=300)
 
+
+def true_lengths(data: np.ndarray):
+  """If trajectories are too short they will contain repeated values. This function returns the real lengths."""
+  data = data.tolist()
+  data: List[List[List[float]]]
+  for traj in data:
+    while len(traj) > 1 and traj[-1] == traj[-2]:
+      traj.pop()
+  return np.array([len(traj) for traj in data])
+
+def plot_stepwise_global(data: np.ndarray, paths_drawn: int, name: str):
+
+  samples, mp_steps, dim = data.shape
+  sample_len = true_lengths(data)
+
+  pca = PCA()
+  pca.fit(np.unique(data.reshape((samples * mp_steps, dim)), axis=0))
+  stepwise_global = pca.transform(data.reshape((samples * mp_steps, dim)))
+  stepwise_global: np.ndarray
+  stepwise_global = stepwise_global.reshape((samples, mp_steps, -1))
+  assert stepwise_global.shape == (samples, mp_steps, min(samples * mp_steps, dim))
+
+  # Plot all hidden dims as independent datapoints
+  fig = plt.figure(figsize=(12, 6))
+  ax = [fig.add_subplot(121), fig.add_subplot(122, projection='3d')]
+
+  for step in range(mp_steps):
+    ax[0].scatter(stepwise_global[sample_len >= step, step, 0],
+                  stepwise_global[sample_len >= step, step, 1],
+                  label=f'mp step {step + 1}', **common_scatter_args(PIXEL_S))
+    ax[1].scatter3D(stepwise_global[sample_len >= step, step, 0],
+                    stepwise_global[sample_len >= step, step, 1],
+                    stepwise_global[sample_len >= step, step, 2],
+                    label=f'mp step {step + 1}', **common_scatter_args(PIXEL_S))
+
+  if paths_drawn > 0:
+    for sample in np.arange(0, samples, step=int(samples / paths_drawn)):
+      ax[0].plot(stepwise_global[sample, :, 0],
+                 stepwise_global[sample, :, 1],
+                 **common_plot_args)
+      ax[1].plot3D(stepwise_global[sample, :, 0],
+                   stepwise_global[sample, :, 1],
+                   stepwise_global[sample, :, 2],
+                   **common_plot_args)
+
+  fig.suptitle(f"Pointwise PCA (shape = samples*mp_steps, dim)\n "
+               f"{get_pca_evr(pca, 3):.2f}% explained")
+
+  fig.tight_layout()
+  fig.savefig(f"plots/{name}_stepwise_global.png", dpi=300)
+
+
+def plot_stepwise_local(data, paths_drawn, name):
+
+  samples, mp_steps, dim = data.shape
+  sample_len = true_lengths(data)
+
+  pcas = [PCA(n_components=3).fit(data[sample_len >= step, step, :]) for step in range(mp_steps)]
+  stepwise_local = np.array([pcas[step].transform(data[:, step, :]) for step in range(mp_steps)])
+  assert stepwise_local.shape == (mp_steps, samples, 3)
+
   SCALE_FACTOR = 2 + mp_steps
   trajs_PCA_scale_factor = 1 / np.max(np.abs(stepwise_local[:, :, 2]), axis=-1) / SCALE_FACTOR
 
@@ -89,13 +141,38 @@ def run_experiment(name: str, path: str, global_paths_drawn=64, traj_drawn=64):
   ax.view_init(azim=-75, elev=15)
   ax.set_box_aspect(aspect=(2.5, 1, 1))
   for i in range(mp_steps):
-    ax.scatter([i] * samples + stepwise_local[i, :, 2] * trajs_PCA_scale_factor[i],
-               stepwise_local[i, :, 0], stepwise_local[i, :, 1], **common_scatter_args(PIXEL_S))
-  if traj_drawn > 0:
-    for i in np.arange(0, samples, step=int(samples / traj_drawn)):
-      ax.plot(np.arange(mp_steps) + stepwise_local[:, i, 2] * trajs_PCA_scale_factor,
-              stepwise_local[:, i, 0], stepwise_local[:, i, 1],
+    ax.scatter(i + stepwise_local[i, sample_len >= i, 2] * trajs_PCA_scale_factor[i],
+               stepwise_local[i, sample_len >= i, 0], stepwise_local[i, sample_len >= i, 1], **common_scatter_args(PIXEL_S))
+  if paths_drawn > 0:
+    for i in np.arange(0, samples, step=int(samples / paths_drawn)):
+      ax.plot(np.arange(sample_len[i]) + stepwise_local[0:sample_len[i], i, 2] * trajs_PCA_scale_factor[0:sample_len[i]],
+              stepwise_local[0:sample_len[i], i, 0], stepwise_local[0:sample_len[i], i, 1],
               **common_plot_args)
 
   fig.tight_layout()
   fig.savefig(f"plots/{name}_stepwise_local.png", dpi=300)
+
+
+def run_experiment(name: str, path: str, paths_drawn=100):
+
+  data_dump = np.load(path + '.npz')
+  data = data_dump['trajs']
+  score = data_dump['score']
+
+  means = np.mean(data, axis=0)
+  mean_adjusted_data = data - means[np.newaxis, ...]
+  plot_stepwise_global(mean_adjusted_data, paths_drawn, name+'_mean')
+  plot_stepwise_local(mean_adjusted_data, paths_drawn, name+'_mean')
+
+  plot_trajwise(data, score, name)
+  alt_score = np.linspace(0, 1, data.shape[0])
+  plot_trajwise(data, alt_score, name+'_alt')
+  plot_heatmap_trajwise(data, name)
+
+  # Plot differences instead of points
+  diffs = data[1:,...] - data[:-1,...]
+  plot_stepwise_global(diffs, paths_drawn, name+'_diffs')
+  plot_stepwise_local(diffs, paths_drawn, name+'_diffs')
+
+  plot_stepwise_global(data, paths_drawn, name)
+  plot_stepwise_local(data, paths_drawn, name)
