@@ -1170,7 +1170,9 @@ def bellman_ford(A: _Array, s: int) -> _Out:
   msk = np.zeros(A.shape[0])
   d[s] = DISCONNECTED
   msk[s] = 1
+  counter = 0
   while True:
+    counter = counter + 1
     prev_d = np.copy(d)
     prev_msk = np.copy(msk)
     probing.push(
@@ -1190,6 +1192,28 @@ def bellman_ford(A: _Array, s: int) -> _Out:
           msk[v] = 1
     if np.all(d == prev_d):
       break
+
+  # probing.push(
+  #     probes,
+  #     specs.Stage.INPUT,
+  #     next_probe={
+  #         'pos': np.copy(A_pos) * 1.0 / A.shape[0],
+  #         's': probing.mask_one(s, A.shape[0]),
+  #         'A': np.copy(A),
+  #         'adj': probing.graph(np.copy(A)),
+  #         'pi_h': np.copy(pi),
+  #         'd': np.copy(d),
+  #         'msk': np.copy(msk)
+  #     })
+  # for i in range(counter):
+  #   probing.push(
+  #       probes,
+  #       specs.Stage.HINT,
+  #       next_probe={
+  #           'pi_h': np.copy(pi),
+  #           'd': np.copy(d),
+  #           'msk': np.copy(msk)
+  #       })
 
   probing.push(probes, specs.Stage.OUTPUT, next_probe={'pi': np.copy(pi)})
   probing.finalize(probes)

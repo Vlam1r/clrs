@@ -297,8 +297,6 @@ class Net(hk.Module):
           first_step=True,
           **common_args)
 
-      # jax.debug.print(f"{nb_mp_steps} steps")
-
       # Then scan through the rest.
       scan_fn = functools.partial(
           self._msg_passing_step,
@@ -427,7 +425,8 @@ class Net(hk.Module):
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     if True:
-      graph_fts = jnp.max(nxt_hidden, axis=-2)
+       # graph_fts = jnp.max(nxt_hidden, axis=-2)
+       graph_fts = jnp.min(nxt_hidden, axis=-2)
 
     # Extract data from new hiddens into graph features and add noise to hiddens
     # hidden_to_graph = hk.Linear(self.hidden_dim)

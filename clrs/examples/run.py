@@ -287,9 +287,10 @@ def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
   """Dump trajectories of datapoints"""
   processed_samples = 0
   trajs = []
-  inputs = []
+  # inputs = []
   preds = []
   outputs = []
+  lengths = []
   while processed_samples < sample_count:
     feedback = next(sampler)
     batch_size = feedback.outputs[0].data.shape[0]
@@ -298,15 +299,17 @@ def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
     cur_preds, _, cur_trajs = predict_fn(new_rng_key, feedback.features)
     preds.append(cur_preds)
     trajs.append(cur_trajs)
-    inputs.append(feedback)
+    # inputs.append(feedback)
+    lengths.append(feedback.features[2])
     processed_samples += batch_size
   preds = _concat(preds, axis=0)
   outputs = _concat(outputs, axis=0)
   trajs = _concat(fill(trajs), axis=0)
-  inputs = _concat(inputs, axis=0)
+  # inputs = _concat(inputs, axis=0)
+  lengths = jax.numpy.array(lengths).flatten().astype(int)
   out = clrs.evaluate_each(outputs, preds)
   graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1, 0, 2)
-  return inputs, graph_fts, out
+  return lengths, graph_fts, out
 
 
 def create_samplers(rng, train_lengths: List[int]):
@@ -389,7 +392,7 @@ def create_samplers(rng, train_lengths: List[int]):
       test_sampler, test_samples, spec = make_multi_sampler(**test_args)
 
 
-      specil_args = dict(sizes=[64],
+      specil_args = dict(sizes=[16],
                        split='test',
                        batch_size=32,
                        multiplier=2**8 * mult,
@@ -611,14 +614,17 @@ def main(unused_argv):
 
   for algo_idx in range(len(special_samplers)):
     new_rng_key, rng_key = jax.random.split(rng_key)
-    inputs, trajs, stats = dump_trajectories(
+    lengths, trajs, stats = dump_trajectories(
         special_samplers[algo_idx],
         functools.partial(specil_model.predict, algorithm_index=algo_idx, return_all_features=True),
         special_sample_counts[algo_idx],
         new_rng_key)
     logging.info(f'(test) algo {FLAGS.algorithms[algo_idx]} : {100*np.mean(stats["pi"]):.2f} +/- '
                  f'{100*np.std(stats["pi"]):.2f}%')
-    trajs_dump = {'trajs': trajs, 'score': stats['pi']}
+    for i in range(3,14):
+      logging.info(f'{i}: count={np.sum(lengths == i)} {100*np.mean(stats["pi"][lengths == i]):.2f} +/- '
+                   f'{100*np.std(stats["pi"][lengths == i]):.2f}%')
+    trajs_dump = {'trajs': trajs, 'score': stats['pi'], 'lengths': lengths}
 
   np.savez('trajs.npz', **trajs_dump)
 
