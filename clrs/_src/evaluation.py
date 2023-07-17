@@ -155,6 +155,7 @@ def evaluate(
   evals['score'] = sum([v.item() for v in evals.values()]) / len(evals)
   return evals
 
+
 def _evaluate(truth, pred, idx=None, lengths=None):
   """Evaluate single prediction of hint or output."""
   assert pred.name == truth.name

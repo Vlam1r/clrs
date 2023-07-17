@@ -39,7 +39,6 @@ See "Introduction to Algorithms" 3ed (CLRS3) for more information.
 from typing import Tuple
 
 import chex
-
 from clrs._src import probing
 from clrs._src import specs
 import numpy as np
@@ -1148,8 +1147,6 @@ def mst_prim(A: _Array, s: int) -> _Out:
 def bellman_ford(A: _Array, s: int) -> _Out:
   """Bellman-Ford's single-source shortest path (Bellman, 1958)."""
 
-  DISCONNECTED = 0
-
   chex.assert_rank(A, 2)
   probes = probing.initialize(specs.SPECS['bellman_ford'])
 
@@ -1168,11 +1165,11 @@ def bellman_ford(A: _Array, s: int) -> _Out:
   d = np.zeros(A.shape[0])
   pi = np.arange(A.shape[0])
   msk = np.zeros(A.shape[0])
-  d[s] = DISCONNECTED
+  d[s] = 0
   msk[s] = 1
-  counter = 0
+  # i = 0
   while True:
-    counter = counter + 1
+    # i += 1
     prev_d = np.copy(d)
     prev_msk = np.copy(msk)
     probing.push(
@@ -1185,7 +1182,7 @@ def bellman_ford(A: _Array, s: int) -> _Out:
         })
     for u in range(A.shape[0]):
       for v in range(A.shape[0]):
-        if prev_msk[u] == 1 and A[u, v] != DISCONNECTED:
+        if prev_msk[u] == 1 and A[u, v] != 0:
           if msk[v] == 0 or prev_d[u] + A[u, v] < d[v]:
             d[v] = prev_d[u] + A[u, v]
             pi[v] = u
@@ -1193,26 +1190,26 @@ def bellman_ford(A: _Array, s: int) -> _Out:
     if np.all(d == prev_d):
       break
 
+  """Use this to generate Fig 3 from the paper. Once the model is trained, 
+   only hint length is important, which can be controlled here easily."""
   # probing.push(
   #     probes,
   #     specs.Stage.INPUT,
   #     next_probe={
   #         'pos': np.copy(A_pos) * 1.0 / A.shape[0],
   #         's': probing.mask_one(s, A.shape[0]),
-  #         'A': np.copy(A),
-  #         'adj': probing.graph(np.copy(A)),
-  #         'pi_h': np.copy(pi),
-  #         'd': np.copy(d),
-  #         'msk': np.copy(msk)
+  #         'A': np.copy(A),   # / max(np.max(d), 1) / 1.2,
+  #         'adj': probing.graph(np.copy(A))
   #     })
-  # for i in range(counter):
+  # offset = 0
+  # for _ in range(max(i+offset, 1)):
   #   probing.push(
   #       probes,
   #       specs.Stage.HINT,
   #       next_probe={
   #           'pi_h': np.copy(pi),
-  #           'd': np.copy(d),
-  #           'msk': np.copy(msk)
+  #           'd': np.copy(prev_d),
+  #           'msk': np.copy(prev_msk)
   #       })
 
   probing.push(probes, specs.Stage.OUTPUT, next_probe={'pi': np.copy(pi)})

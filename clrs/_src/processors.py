@@ -408,9 +408,10 @@ class PGN(Processor):
         msg_e + jnp.expand_dims(msg_g, axis=(1, 2)))
 
     if self._msgs_mlp_sizes is not None:
-      mlp_in = msgs if self._force_linear else jax.nn.relu(msgs)
-      activation = (lambda x: x) if self._force_linear else jax.nn.relu
-      msgs = hk.nets.MLP(self._msgs_mlp_sizes, activation=activation)(mlp_in)
+      if not self._force_linear:
+        msgs = hk.nets.MLP(self._msgs_mlp_sizes)(jax.nn.relu(msgs))
+      else:
+        msgs = hk.nets.MLP(self._msgs_mlp_sizes, activation=lambda x: x)(msgs)
 
     if self.mid_act is not None and not self._force_linear:
       msgs = self.mid_act(msgs)
@@ -423,6 +424,13 @@ class PGN(Processor):
                          msgs,
                          -BIG_NUMBER)
       msgs = jnp.max(maxarg, axis=1)
+    elif self.reduction == jax.nn.softmax:
+      maxarg = jnp.where(jnp.expand_dims(adj_mat, -1),
+                         msgs,
+                         -BIG_NUMBER)
+      inv_temp = 1  # hk.get_parameter("temp", (), init=jnp.ones)
+      soft_coeffs = jax.nn.softmax(inv_temp * maxarg, axis=1)
+      msgs = jnp.sum(msgs * soft_coeffs, axis=1)
     else:
       msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
 
@@ -709,7 +717,8 @@ ProcessorFactory = Callable[[int], Processor]
 def get_processor_factory(kind: str,
                           use_ln: bool,
                           nb_triplet_fts: int,
-                          nb_heads: Optional[int] = None) -> ProcessorFactory:
+                          nb_heads: Optional[int] = None,
+                          reduction: Optional[_Fn] = jnp.max) -> ProcessorFactory:
   """Returns a processor factory.
 
   Args:
@@ -781,6 +790,7 @@ def get_processor_factory(kind: str,
           use_ln=use_ln,
           use_triplets=False,
           nb_triplet_fts=0,
+          reduction=reduction
       )
     elif kind == 'pgnlin':
       processor = LinearPGN(
@@ -789,6 +799,7 @@ def get_processor_factory(kind: str,
         use_ln=use_ln,
         use_triplets=False,
         nb_triplet_fts=0,
+        reduction=reduction
         )
     elif kind == 'pgn_mask':
       processor = PGNMask(
@@ -797,6 +808,7 @@ def get_processor_factory(kind: str,
           use_ln=use_ln,
           use_triplets=False,
           nb_triplet_fts=0,
+          reduction=reduction
       )
     elif kind == 'triplet_mpnn':
       processor = MPNN(
@@ -805,6 +817,7 @@ def get_processor_factory(kind: str,
           use_ln=use_ln,
           use_triplets=True,
           nb_triplet_fts=nb_triplet_fts,
+          reduction=reduction
       )
     elif kind == 'triplet_pgn':
       processor = PGN(
@@ -813,6 +826,7 @@ def get_processor_factory(kind: str,
           use_ln=use_ln,
           use_triplets=True,
           nb_triplet_fts=nb_triplet_fts,
+          reduction=reduction
       )
     elif kind == 'triplet_pgn_mask':
       processor = PGNMask(
@@ -875,6 +889,7 @@ def get_processor_factory(kind: str,
           use_triplets=True,
           nb_triplet_fts=nb_triplet_fts,
           gated=True,
+          reduction=reduction
       )
     else:
       raise ValueError('Unexpected processor kind ' + kind)

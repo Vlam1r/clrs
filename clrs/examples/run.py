@@ -122,8 +122,13 @@ flags.DEFINE_boolean('test', False,
 flags.DEFINE_string('sample_strat', None,
                      'Sample augmentation strategy for Bellman Ford')
 flags.DEFINE_enum('noise_injection_strategy', 'Noisefree',
-                  ['Noisefree', 'Uniform', 'Directional', 'Project', 'Discard'],
+                  ['Noisefree', 'Uniform', 'Directional', 'Project', 'Discard', 'Corrupt'],
                   'Type of destructive noise to apply during message passing.')
+
+flags.DEFINE_float('decay', 1.0,
+                     'Perform exponential decay inside nets.')
+
+flags.DEFINE_boolean('softmax_reduction', False, 'Use softmax reduction in processor instead of max, for training.')
 
 FLAGS = flags.FLAGS
 
@@ -287,29 +292,35 @@ def dump_trajectories(sampler, predict_fn, sample_count, rng_key):
   """Dump trajectories of datapoints"""
   processed_samples = 0
   trajs = []
-  # inputs = []
+  inputs = []
   preds = []
   outputs = []
   lengths = []
+  hints = []
   while processed_samples < sample_count:
     feedback = next(sampler)
     batch_size = feedback.outputs[0].data.shape[0]
     outputs.append(feedback.outputs)
     new_rng_key, rng_key = jax.random.split(rng_key)
-    cur_preds, _, cur_trajs = predict_fn(new_rng_key, feedback.features)
+    cur_preds, cur_hints, cur_trajs = predict_fn(new_rng_key, feedback.features,
+                                                 return_hints=True)
     preds.append(cur_preds)
+    hints.append(cur_hints)
     trajs.append(cur_trajs)
-    # inputs.append(feedback)
+    inputs.append(feedback)
     lengths.append(feedback.features[2])
     processed_samples += batch_size
   preds = _concat(preds, axis=0)
   outputs = _concat(outputs, axis=0)
-  trajs = _concat(fill(trajs), axis=0)
-  # inputs = _concat(inputs, axis=0)
+  # trajs = _concat(fill(trajs), axis=0)
+  hints = _concat(fill(hints), axis=0)
+  inputs = _concat(inputs, axis=0)
   lengths = jax.numpy.array(lengths).flatten().astype(int)
   out = clrs.evaluate_each(outputs, preds)
-  graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1, 0, 2)
-  return lengths, graph_fts, out
+  # graph_fts = jax.numpy.asarray([d['node'] for d in trajs]).transpose(1, 2, 0, 3)
+  # graph_fts = jax.numpy.asarray([d['graph'] for d in trajs]).transpose(1, 0, 2)
+  graph_fts = np.zeros_like(lengths)
+  return lengths, graph_fts, out, inputs, preds, hints
 
 
 def create_samplers(rng, train_lengths: List[int]):
@@ -392,10 +403,10 @@ def create_samplers(rng, train_lengths: List[int]):
       test_sampler, test_samples, spec = make_multi_sampler(**test_args)
 
 
-      specil_args = dict(sizes=[16],
+      specil_args = dict(sizes=[64],
                        split='test',
                        batch_size=32,
-                       multiplier=2**8 * mult,
+                       multiplier=2**9  * mult,
                        randomize_pos=False,
                        chunked=False,
                        sampler_kwargs=dict(specil=FLAGS.sample_strat, force_otf=True),
@@ -432,6 +443,12 @@ def main(unused_argv):
   else:
     raise ValueError('Hint mode not in {encoded_decoded, decoded_only, none}.')
 
+  print(FLAGS.seed)
+  print(FLAGS.algorithms)
+  print(FLAGS.decay)
+  print(FLAGS.softmax_reduction)
+  print(FLAGS.train_steps)
+
 
   train_lengths = [int(x) for x in FLAGS.train_lengths]
 
@@ -467,6 +484,7 @@ def main(unused_argv):
       hint_repred_mode=FLAGS.hint_repred_mode,
       nb_msg_passing_steps=FLAGS.nb_msg_passing_steps,
       noise_mode=FLAGS.noise_injection_strategy,
+      decay=FLAGS.decay,
       )
 
   eval_model = clrs.models.BaselineModel(
@@ -482,6 +500,23 @@ def main(unused_argv):
         )
   else:
     train_model = eval_model
+
+  if FLAGS.softmax_reduction:
+    # Modify the train model to softmax.
+    # WARN Incompatible with chunked training
+    processor_factory_softmax = clrs.get_processor_factory(
+      FLAGS.processor_type,
+      use_ln=FLAGS.use_ln,
+      nb_triplet_fts=FLAGS.nb_triplet_fts,
+      nb_heads=FLAGS.nb_heads,
+      reduction=jax.nn.softmax
+      )
+    model_params['processor_factory'] = processor_factory_softmax
+    train_model = clrs.models.BaselineModel(
+      spec=spec_list,
+      dummy_trajectory=[next(t) for t in val_samplers],
+      **model_params
+      )
 
   if FLAGS.test:
     with open("D:\\tmp\\CLRS30_v1.0.0\\best.pkl", 'rb') as file:
@@ -565,6 +600,8 @@ def main(unused_argv):
 
         next_eval += FLAGS.eval_every
 
+        # logging.info(f"Inv T: {train_model.params['net/linear_pgn_clrs_processor']['temp']:.3f}")
+
         # If best total score, update best checkpoint.
         # Also save a best checkpoint on the first step.
         msg = (f'best avg val score was '
@@ -573,7 +610,7 @@ def main(unused_argv):
                f'val scores are: ')
         msg += ', '.join(
             ['%s: %.3f' % (x, y) for (x, y) in zip(FLAGS.algorithms, val_scores)])
-        if (sum(val_scores) > best_score) or step == 0:
+        if (sum(val_scores) >  best_score) or step == 0:
           best_score = sum(val_scores)
           logging.info('Checkpointing best model, %s', msg)
           train_model.save_model('best.pkl')
@@ -614,19 +651,31 @@ def main(unused_argv):
 
   for algo_idx in range(len(special_samplers)):
     new_rng_key, rng_key = jax.random.split(rng_key)
-    lengths, trajs, stats = dump_trajectories(
+    lengths, trajs, stats, feedback, preds, hints = dump_trajectories(
         special_samplers[algo_idx],
         functools.partial(specil_model.predict, algorithm_index=algo_idx, return_all_features=True),
         special_sample_counts[algo_idx],
         new_rng_key)
-    logging.info(f'(test) algo {FLAGS.algorithms[algo_idx]} : {100*np.mean(stats["pi"]):.2f} +/- '
-                 f'{100*np.std(stats["pi"]):.2f}%')
-    for i in range(3,14):
+    logging.info('(test) algo %s : %s', FLAGS.algorithms[algo_idx], {k:100*np.mean(v) for k,v in stats.items()})
+    logging.info(f'var: {100*np.std(stats["pi"])}')
+    for i in range(1,20):
       logging.info(f'{i}: count={np.sum(lengths == i)} {100*np.mean(stats["pi"][lengths == i]):.2f} +/- '
                    f'{100*np.std(stats["pi"][lengths == i]):.2f}%')
-    trajs_dump = {'trajs': trajs, 'score': stats['pi'], 'lengths': lengths}
+    trajs_dump = {'trajs': trajs, 'score': stats['pi'], 'lengths': lengths,
+                  'inputs': feedback.features.inputs,
+                  'outputs': feedback.outputs,
+                  'hints': hints,
+                  }
 
   np.savez('trajs.npz', **trajs_dump)
+
+  with open('trajs.pkl', 'wb') as file:
+    pickle.dump({
+      'trajs': trajs,
+      'score': stats,
+      'feedback': feedback,
+      'preds': preds
+      }, file, protocol=-1)
 
 
   logging.info('Done!')

@@ -14,7 +14,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="clrs.examples.run" />
-    <option name="PARAMETERS" value="--dataset_path ./  --seed 42 --algorithms bellman_ford --processor_type pgnlin --train_steps 30000" />
+    <option name="PARAMETERS" value="--dataset_path ./  --seed 42 --algorithms bellman_ford --processor_type pgnlin --train_steps 20001 --noise_injection_strategy Noisefree --decay 1.0" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="true" />

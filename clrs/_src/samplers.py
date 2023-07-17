@@ -106,9 +106,8 @@ class Sampler(abc.ABC):
       self.max_steps = -1
       if force_otf:
         return
-      ds = self._data_stream(*args, **kwargs)
       for _ in range(1000):
-        data = next(ds)
+        data = next(self._ds)
         _, probes = algorithm(*data)
         _, _, hint = probing.split_stages(probes, spec)
         for dp in hint:
@@ -130,7 +129,6 @@ class Sampler(abc.ABC):
   def _make_batch(self, num_samples: int, spec: specs.Spec, min_length: int,
                   algorithm: Algorithm, *args, **kwargs):
     """Generate a batch of data."""
-
     inputs = []
     outputs = []
     hints = []
@@ -144,9 +142,6 @@ class Sampler(abc.ABC):
       hints.append(hint)
       if len(hints) % 1000 == 0:
         logging.info('%i samples created', len(hints))
-
-      # with open('true_len.txt', 'ra') as file:
-      #   file.write(len(inp))
 
     # Batch and pad trajectories to max(T).
     inputs = _batch_io(inputs)
@@ -210,6 +205,7 @@ class Sampler(abc.ABC):
   def _random_er_graph(self, nb_nodes, p=0.5, directed=False, acyclic=False,
                        weighted=False, low=0.0, high=1.0):
     """Random Erdos-Renyi graph."""
+
     mat = self._rng.binomial(1, p, size=(nb_nodes, nb_nodes))
     if not directed:
       mat *= np.transpose(mat)
@@ -550,56 +546,57 @@ class BellmanFordSampler(Sampler):
       yield from super()._data_stream(*args, **kwargs)
       return
 
+    # kwargs['p'] = 0.25,
+    # random = super()._data_stream(*args, directed=False, **kwargs)
     random = super()._data_stream(*args, **kwargs)
 
-    match self._specil:
-      case 'random':
-        yield from random
-      case 'johnson':
-        kwargs['p'] = 0.1,
-        delta = 1/4
-        johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
-                                      k=self._num_samples, hi=1 / 2 - delta)
-        yield from johnson
-      case 'flat_johnson':
-        kwargs['p'] = 0.1,
-        johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2, high=1 / 2, **kwargs),
-                                      k=self._num_samples, hi=1 / 2)
-        yield from johnson
-      case 'shuffle':
-        shuffle = self.shuffle_stream(random, k=self._num_samples)
-        yield from shuffle
-      case 'linear':
-        linear = self.seq_stream(random, k=self._num_samples)
-        yield from linear
-      case 'shuffle_linear':
-        split = 256
-        shuffle = self.shuffle_stream(random, k=self._num_samples // split)
-        linear = self.seq_stream(shuffle, k=split)
-        yield from linear
-      case 'interleave_random_linear':
-        interleave = self.interleave_stream(random, self.seq_stream(random, k=self._num_samples // 2))
-        yield from interleave
-      case 'random_linear':
-        split = 64
-        linear = self.seq_stream(random, k=split)
-        yield from linear
-      case 'random_johnson':
-        kwargs['p'] = 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
-        delta = 7/16
-        split = 512
-        johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
-                                      k=split, hi=1 / 2 - delta)
-        yield from johnson
-      case 'r_all':
-        kwargs['p'] = 0.1,
-        delta = 1/4
-        random = super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs)
-        johnson = self.johnson_stream(random, k=64, hi=1 / 2 - delta)
-        shuffle = self.shuffle_stream(johnson, k=64)
-        yield from shuffle
-      case _:
-        raise Exception("Invalid argument")
+    if self._specil == 'random':
+      yield from random
+    elif self._specil == 'johnson':
+      kwargs['p'] = 0.05,
+      delta = 1/4
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
+                                    k=self._num_samples, hi=1 / 2 - delta)
+      yield from johnson
+    elif self._specil ==  'flat_johnson':
+      kwargs['p'] = 0.1,
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2, high=1 / 2, **kwargs),
+                                    k=self._num_samples, hi=1 / 2)
+      yield from johnson
+    elif self._specil == 'shuffle':
+      shuffle = self.shuffle_stream(random, k=self._num_samples)
+      yield from shuffle
+    elif self._specil == 'linear':
+      linear = self.seq_stream(random, k=self._num_samples)
+      yield from linear
+    elif self._specil == 'shuffle_linear':
+      split = 256
+      shuffle = self.shuffle_stream(random, k=self._num_samples // split)
+      linear = self.seq_stream(shuffle, k=split)
+      yield from linear
+    elif self._specil == 'interleave_random_linear':
+      interleave = self.interleave_stream(random, self.seq_stream(random, k=self._num_samples // 2))
+      yield from interleave
+    elif self._specil == 'random_linear':
+      split = 64
+      linear = self.seq_stream(random, k=split)
+      yield from linear
+    elif self._specil == 'random_johnson':
+      kwargs['p'] = 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
+      delta = 7/16
+      split = 4096
+      johnson = self.johnson_stream(super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs),
+                                    k=split, hi=1 / 2 - delta)
+      yield from johnson
+    elif self._specil == 'r_all':
+      kwargs['p'] = 0.1,
+      delta = 1/4
+      random = super()._data_stream(*args, low=1 / 2 - delta, high=1 / 2 + delta, **kwargs)
+      johnson = self.johnson_stream(random, k=64, hi=1 / 2 - delta)
+      shuffle = self.shuffle_stream(johnson, k=64)
+      yield from shuffle
+    else:
+      raise Exception("Invalid argument")
 
 
 class DAGPathSampler(Sampler):

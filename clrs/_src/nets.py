@@ -16,7 +16,6 @@
 """JAX implementation of CLRS basic network."""
 
 import functools
-import logging
 
 from typing import Dict, List, Optional, Tuple
 
@@ -33,7 +32,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
-from Workspace.noise_injection import inject_noise, load_noise_vectors, NoiseInjectionStrategy
+from lsr.noise_injection import inject_noise, load_noise_vectors, NoiseInjectionStrategy
 
 _Array = chex.Array
 _DataPoint = probing.DataPoint
@@ -89,6 +88,7 @@ class Net(hk.Module):
       nb_dims=None,
       nb_msg_passing_steps=1,
       noise_mode: str = 'Noisefree',
+      decay: float = 1.0,
       name: str = 'net',
   ):
     """Constructs a `Net`."""
@@ -106,6 +106,7 @@ class Net(hk.Module):
     self.use_lstm = use_lstm
     self.encoder_init = encoder_init
     self.nb_msg_passing_steps = nb_msg_passing_steps
+    self.decay = decay
     self.noise_mode = NoiseInjectionStrategy[noise_mode]
     self.noise_vectors = load_noise_vectors(self.noise_mode)
 
@@ -172,7 +173,7 @@ class Net(hk.Module):
     hiddens, output_preds_cand, hint_preds, lstm_state, features = self._one_step_pred(
         inputs, cur_hint, mp_state.hiddens,
         batch_size, nb_nodes, mp_state.lstm_state,
-        spec, encs, decs, repred, i)
+        spec, encs, decs, repred, i, lengths)
 
     if first_step:
       output_preds = output_preds_cand
@@ -328,8 +329,8 @@ class Net(hk.Module):
     else:
       output_preds = output_mp_state.output_preds
     hint_preds = invert(accum_mp_state.hint_preds)
-
     features = invert(accum_mp_state.features)
+
     return output_preds, hint_preds, features
 
   def _construct_encoders_decoders(self):
@@ -380,6 +381,7 @@ class Net(hk.Module):
       decs: Dict[str, Tuple[hk.Module]],
       repred: bool,
       i: int,
+      lengths: _Array
   ):
     """Generates one-step predictions."""
 
@@ -409,9 +411,10 @@ class Net(hk.Module):
         except Exception as e:
           raise Exception(f'Failed to process {dp}') from e
 
-
     # PROCESS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    nxt_hidden = hidden
+    nxt_hidden = hidden * self.decay
+    # nxt_hidden = jnp.mean(hidden, axis=-1, keepdims=True) + \
+    #              (hidden - jnp.mean(hidden, axis=-1, keepdims=True)) * self.decay
     for _ in range(self.nb_msg_passing_steps):
       nxt_hidden, nxt_edge = self.processor(
           node_fts,
@@ -422,17 +425,8 @@ class Net(hk.Module):
           batch_size=batch_size,
           nb_nodes=nb_nodes,
       )
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    if True:
-       # graph_fts = jnp.max(nxt_hidden, axis=-2)
-       graph_fts = jnp.min(nxt_hidden, axis=-2)
-
-    # Extract data from new hiddens into graph features and add noise to hiddens
-    # hidden_to_graph = hk.Linear(self.hidden_dim)
-    # graph_fts = graph_fts + hidden_to_graph(jnp.max(nxt_hidden, axis=-2))
-
-    nxt_hidden = inject_noise(nxt_hidden, self.noise_vectors, self.noise_mode, hk.next_rng_key(), i)
+    nxt_hidden = inject_noise(nxt_hidden, self.noise_vectors, self.noise_mode, hk.next_rng_key(), i,
+                              lengths.reshape(-1,1).repeat(repeats=nxt_hidden.shape[1], axis=1))
 
     if not repred:      # dropout only on training
       nxt_hidden = hk.dropout(hk.next_rng_key(), self._dropout_prob, nxt_hidden)
@@ -464,7 +458,10 @@ class Net(hk.Module):
         repred=repred,
     )
 
-    features = dict(graph=graph_fts)
+    # features = dict(graph=graph_fts)
+    # features = dict(node=nxt_hidden)
+    # features = dict(graph=jnp.mean(nxt_hidden, axis=-2))
+    features = {}
     return nxt_hidden, output_preds, hint_preds, nxt_lstm_state, features
 
 
