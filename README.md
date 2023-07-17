@@ -52,11 +52,13 @@ Latent spaces under scaling symmetry, for many equivalency classes:
 This repository is based on Google DeepMind's CLRS Algorithmic Reasoning Benchmark 
 [deepmind/clrs](https://github.com/deepmind/clrs).
 
-Changes to the original repository can be summarised as follows:
-
 A standard way to run the code is to first train the NAR with ```run.py```, then to extract
 trajectories by passing the ```test``` flag, and finally to use the trajectories in various
 Jupyter notebooks to generate graphical visualisations.
+
+### Features and changes
+
+Features present in this repository compared to the original can be summarised as follows:
 
 * In the ```clrs/``` directory, which contains original DeepMind code, we make the following 
 changes:
