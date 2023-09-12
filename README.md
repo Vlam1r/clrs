@@ -3,7 +3,7 @@
 This repository implements the tools for analysing latent spaces of NARs and their symmetries, 
 as described in the paper
 
-[Latent Space Representations of Neural Algorithmic Reasoners]()
+[Latent Space Representations of Neural Algorithmic Reasoners](https://arxiv.org/abs/2307.08874)
 
 by Vladimir V. Mirjanić, Razvan Pascanu, and Petar Veličković (ICML 2023 Workshop).
 
